@@ -1,0 +1,13 @@
+{
+  "name": "apiabencoado",
+  "version": "1.0.0",
+  "description": "API Node com Express",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
