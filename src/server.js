@@ -4,7 +4,7 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 app.get('/', (req, res) => {
-  res.send('API online');
+  res.send('API online roteado');
 });
 
 app.get('/ping', (req, res) => {
