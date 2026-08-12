@@ -1,0 +1,1044 @@
+const { Router } = require('express');
+const bcrypt = require('bcryptjs');
+const prisma = require('../lib/prisma');
+const { calcularStatusLoja } = require('../lib/statusLoja');
+const { registrarLog } = require('../lib/auditLog');
+
+const router = Router();
+
+const asyncHandler = (fn) => (req, res, next) => fn(req, res, next).catch(next);
+
+const SALT_ROUNDS = 10;
+
+const SLUG_REGEX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+const onlyDigits = (value = '') => String(value).replace(/\D/g, '');
+
+const UNIQUE_FIELD_LABELS = {
+  email: 'E-mail',
+  slug: 'Slug',
+  usuario: 'Usuário',
+  documento: 'CNPJ/CPF',
+};
+
+/** Remove o hash da senha antes de devolver a empresa para o cliente. */
+const serializeEmpresa = (empresa) => {
+  const { senhaHash, ...rest } = empresa;
+  return rest;
+};
+
+const validarPayload = ({ nome, responsavelNome, email, telefone, documento, slug, usuario }, { partial = false } = {}) => {
+  const erros = [];
+
+  const obrigatorio = (valor, campo) => {
+    if (!partial && !valor) erros.push(`Campo "${campo}" é obrigatório`);
+  };
+
+  obrigatorio(nome, 'nome');
+  obrigatorio(responsavelNome, 'responsavelNome');
+  obrigatorio(email, 'email');
+  obrigatorio(telefone, 'telefone');
+  obrigatorio(documento, 'documento');
+  obrigatorio(slug, 'slug');
+  obrigatorio(usuario, 'usuario');
+
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    erros.push('E-mail inválido');
+  }
+
+  if (documento) {
+    const digits = onlyDigits(documento);
+    if (digits.length !== 11 && digits.length !== 14) {
+      erros.push('Documento deve ser um CPF (11 dígitos) ou CNPJ (14 dígitos) válido');
+    }
+  }
+
+  if (slug && !SLUG_REGEX.test(slug)) {
+    erros.push('Slug deve conter apenas letras minúsculas, números e hífens (ex: minha-empresa)');
+  }
+
+  return erros;
+};
+
+const handlePrismaError = (error, res) => {
+  if (error.code === 'P2025') {
+    return res.status(404).json({ error: 'Empresa não encontrada' });
+  }
+  if (error.code === 'P2002') {
+    const campo = Array.isArray(error.meta?.target) ? error.meta.target[0] : error.meta?.target;
+    const chave = String(campo || '').replace(/^empresas_|_key$/g, '');
+    const label = UNIQUE_FIELD_LABELS[chave] || 'campo';
+    return res.status(409).json({ error: `Já existe uma empresa cadastrada com este ${label}` });
+  }
+  throw error;
+};
+
+/**
+ * @openapi
+ * components:
+ *   schemas:
+ *     Empresa:
+ *       type: object
+ *       properties:
+ *         id:
+ *           type: string
+ *           format: uuid
+ *           readOnly: true
+ *         nome:
+ *           type: string
+ *         responsavelNome:
+ *           type: string
+ *         email:
+ *           type: string
+ *         telefone:
+ *           type: string
+ *         documento:
+ *           type: string
+ *         slug:
+ *           type: string
+ *         usuario:
+ *           type: string
+ *         empresaAtiva:
+ *           type: boolean
+ *         adminAtivo:
+ *           type: boolean
+ *         createdAt:
+ *           type: string
+ *           format: date-time
+ *         updatedAt:
+ *           type: string
+ *           format: date-time
+ *       example:
+ *         id: 629a6127-707c-4060-9e57-5f5bc8af057f
+ *         nome: Restaurante Abençoado
+ *         responsavelNome: João da Silva
+ *         email: joao@abencoado.com
+ *         telefone: "5581999999999"
+ *         documento: "12345678000199"
+ *         slug: restaurante-abencoado
+ *         usuario: joao.silva
+ *         empresaAtiva: true
+ *         adminAtivo: true
+ *     EmpresaInput:
+ *       type: object
+ *       required: [nome, responsavelNome, email, telefone, documento, slug, usuario, senha]
+ *       properties:
+ *         nome:
+ *           type: string
+ *         responsavelNome:
+ *           type: string
+ *         email:
+ *           type: string
+ *         telefone:
+ *           type: string
+ *         documento:
+ *           type: string
+ *         slug:
+ *           type: string
+ *         usuario:
+ *           type: string
+ *         senha:
+ *           type: string
+ *         empresaAtiva:
+ *           type: boolean
+ *         adminAtivo:
+ *           type: boolean
+ *     StatusInput:
+ *       type: object
+ *       required: [ativo]
+ *       properties:
+ *         ativo:
+ *           type: boolean
+ *     SenhaInput:
+ *       type: object
+ *       required: [senha]
+ *       properties:
+ *         senha:
+ *           type: string
+ */
+
+/**
+ * @openapi
+ * /empresas:
+ *   get:
+ *     summary: Lista empresas cadastradas, com busca opcional
+ *     tags: [Empresas]
+ *     parameters:
+ *       - in: query
+ *         name: q
+ *         schema:
+ *           type: string
+ *         description: Busca por nome, CNPJ/CPF, e-mail ou slug
+ *     responses:
+ *       200:
+ *         description: Lista de empresas
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 $ref: '#/components/schemas/Empresa'
+ */
+router.get('/', asyncHandler(async (req, res) => {
+  const { q } = req.query;
+
+  const where = q
+    ? {
+      OR: [
+        { nome: { contains: q, mode: 'insensitive' } },
+        { email: { contains: q, mode: 'insensitive' } },
+        { slug: { contains: q, mode: 'insensitive' } },
+        { documento: { contains: onlyDigits(q) || q, mode: 'insensitive' } },
+        { responsavelNome: { contains: q, mode: 'insensitive' } },
+      ],
+    }
+    : undefined;
+
+  const empresas = await prisma.empresa.findMany({
+    where,
+    orderBy: { createdAt: 'desc' },
+  });
+
+  res.json(empresas.map(serializeEmpresa));
+}));
+
+/**
+ * @openapi
+ * /empresas/slug/{slug}:
+ *   get:
+ *     summary: Resolve os dados públicos de uma empresa pelo slug (usado pelo roteamento /{slug} do site)
+ *     tags: [Empresas]
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Dados públicos da empresa
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 id:
+ *                   type: string
+ *                   format: uuid
+ *                 nome:
+ *                   type: string
+ *                 slug:
+ *                   type: string
+ *                 empresaAtiva:
+ *                   type: boolean
+ *                 telefone:
+ *                   type: string
+ *                 descricao:
+ *                   type: string
+ *                   nullable: true
+ *                 sobre:
+ *                   type: string
+ *                   nullable: true
+ *                 endereco:
+ *                   type: string
+ *                   nullable: true
+ *                 horarioFuncionamento:
+ *                   type: string
+ *                   nullable: true
+ *                 instagramUrl:
+ *                   type: string
+ *                   nullable: true
+ *                 facebookUrl:
+ *                   type: string
+ *                   nullable: true
+ *                 logoUrl:
+ *                   type: string
+ *                   nullable: true
+ *                 taxaEntrega:
+ *                   type: number
+ *                 corPrimaria:
+ *                   type: string
+ *                 corSecundaria:
+ *                   type: string
+ *                 faviconUrl:
+ *                   type: string
+ *                   nullable: true
+ *                 heroUsarCarrossel:
+ *                   type: boolean
+ *                 heroTitulo:
+ *                   type: string
+ *                   nullable: true
+ *                 heroSubtitulo:
+ *                   type: string
+ *                   nullable: true
+ *                 heroBadgeLabel:
+ *                   type: string
+ *                   nullable: true
+ *                 heroImagemUrl:
+ *                   type: string
+ *                   nullable: true
+ *                 heroLinkUrl:
+ *                   type: string
+ *                   nullable: true
+ *       404:
+ *         description: Empresa não encontrada
+ */
+router.get('/slug/:slug', asyncHandler(async (req, res) => {
+  const empresa = await prisma.empresa.findUnique({
+    where: { slug: req.params.slug.toLowerCase() },
+    select: {
+      id: true,
+      nome: true,
+      slug: true,
+      empresaAtiva: true,
+      telefone: true,
+      descricao: true,
+      sobre: true,
+      endereco: true,
+      horarioFuncionamento: true,
+      instagramUrl: true,
+      facebookUrl: true,
+      logoUrl: true,
+      taxaEntrega: true,
+      corPrimaria: true,
+      corSecundaria: true,
+      faviconUrl: true,
+      heroUsarCarrossel: true,
+      heroTitulo: true,
+      heroSubtitulo: true,
+      heroBadgeLabel: true,
+      heroImagemUrl: true,
+      heroLinkUrl: true,
+      termosConteudo: true,
+      lojaAbertaManual: true,
+      usarHorarioAutomatico: true,
+      tempoEstimadoMin: true,
+      tempoEstimadoMax: true,
+      pedidoMinimo: true,
+      freteGratisAcimaDe: true,
+      horarios: { orderBy: { diaSemana: 'asc' } },
+    },
+  });
+
+  if (!empresa) {
+    return res.status(404).json({ error: 'Empresa não encontrada' });
+  }
+
+  const { aberta } = calcularStatusLoja(empresa, empresa.horarios);
+
+  res.json({ ...empresa, abertaAgora: aberta });
+}));
+
+/**
+ * @openapi
+ * /empresas/{id}:
+ *   get:
+ *     summary: Busca uma empresa pelo id
+ *     tags: [Empresas]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       200:
+ *         description: Empresa encontrada
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Empresa'
+ *       404:
+ *         description: Empresa não encontrada
+ */
+router.get('/:id', asyncHandler(async (req, res) => {
+  const empresa = await prisma.empresa.findUnique({ where: { id: req.params.id } });
+
+  if (!empresa) {
+    return res.status(404).json({ error: 'Empresa não encontrada' });
+  }
+
+  res.json(serializeEmpresa(empresa));
+}));
+
+/**
+ * @openapi
+ * /empresas:
+ *   post:
+ *     summary: Cadastra uma nova empresa
+ *     tags: [Empresas]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/EmpresaInput'
+ *     responses:
+ *       201:
+ *         description: Empresa criada
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Empresa'
+ *       400:
+ *         description: Dados inválidos
+ *       409:
+ *         description: Campo único já cadastrado
+ */
+router.post('/', asyncHandler(async (req, res) => {
+  const {
+    nome, responsavelNome, email, telefone, documento, slug, usuario, senha,
+    empresaAtiva, adminAtivo,
+  } = req.body;
+
+  const erros = validarPayload(req.body);
+  if (!senha || String(senha).length < 6) {
+    erros.push('Campo "senha" é obrigatório e deve ter ao menos 6 caracteres');
+  }
+  if (erros.length) {
+    return res.status(400).json({ error: erros.join('; ') });
+  }
+
+  const senhaHash = await bcrypt.hash(senha, SALT_ROUNDS);
+
+  try {
+    const empresa = await prisma.empresa.create({
+      data: {
+        nome,
+        responsavelNome,
+        email,
+        telefone,
+        documento: onlyDigits(documento),
+        slug: slug.toLowerCase(),
+        usuario,
+        senhaHash,
+        empresaAtiva: empresaAtiva ?? true,
+        adminAtivo: adminAtivo ?? true,
+      },
+    });
+
+    res.status(201).json(serializeEmpresa(empresa));
+  } catch (error) {
+    return handlePrismaError(error, res);
+  }
+}));
+
+/**
+ * @openapi
+ * /empresas/{id}:
+ *   put:
+ *     summary: Atualiza os dados cadastrais de uma empresa (não altera a senha)
+ *     tags: [Empresas]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/EmpresaInput'
+ *     responses:
+ *       200:
+ *         description: Empresa atualizada
+ *       400:
+ *         description: Dados inválidos
+ *       404:
+ *         description: Empresa não encontrada
+ *       409:
+ *         description: Campo único já cadastrado
+ */
+router.put('/:id', asyncHandler(async (req, res) => {
+  const {
+    nome, responsavelNome, email, telefone, documento, slug, usuario,
+    empresaAtiva, adminAtivo,
+  } = req.body;
+
+  const erros = validarPayload(req.body);
+  if (erros.length) {
+    return res.status(400).json({ error: erros.join('; ') });
+  }
+
+  try {
+    const empresa = await prisma.empresa.update({
+      where: { id: req.params.id },
+      data: {
+        nome,
+        responsavelNome,
+        email,
+        telefone,
+        documento: onlyDigits(documento),
+        slug: slug.toLowerCase(),
+        usuario,
+        ...(empresaAtiva !== undefined ? { empresaAtiva } : {}),
+        ...(adminAtivo !== undefined ? { adminAtivo } : {}),
+      },
+    });
+
+    res.json(serializeEmpresa(empresa));
+  } catch (error) {
+    return handlePrismaError(error, res);
+  }
+}));
+
+/**
+ * @openapi
+ * /empresas/{id}/status-empresa:
+ *   patch:
+ *     summary: Ativa ou inativa a empresa
+ *     tags: [Empresas]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/StatusInput'
+ *     responses:
+ *       200:
+ *         description: Status atualizado
+ *       404:
+ *         description: Empresa não encontrada
+ */
+router.patch('/:id/status-empresa', asyncHandler(async (req, res) => {
+  const { ativo } = req.body;
+  if (typeof ativo !== 'boolean') {
+    return res.status(400).json({ error: 'Campo "ativo" é obrigatório e deve ser booleano' });
+  }
+
+  try {
+    const empresa = await prisma.empresa.update({
+      where: { id: req.params.id },
+      data: { empresaAtiva: ativo },
+    });
+    await registrarLog({
+      tipo: 'ALTERACAO_CRITICA', empresaId: empresa.id, empresaNome: empresa.nome, ator: 'super-admin',
+      acao: ativo ? 'Empresa reativada' : 'Empresa bloqueada/desativada',
+    });
+    res.json(serializeEmpresa(empresa));
+  } catch (error) {
+    return handlePrismaError(error, res);
+  }
+}));
+
+/**
+ * @openapi
+ * /empresas/{id}/status-admin:
+ *   patch:
+ *     summary: Ativa ou inativa o administrador da empresa
+ *     tags: [Empresas]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/StatusInput'
+ *     responses:
+ *       200:
+ *         description: Status atualizado
+ *       404:
+ *         description: Empresa não encontrada
+ */
+router.patch('/:id/status-admin', asyncHandler(async (req, res) => {
+  const { ativo } = req.body;
+  if (typeof ativo !== 'boolean') {
+    return res.status(400).json({ error: 'Campo "ativo" é obrigatório e deve ser booleano' });
+  }
+
+  try {
+    const empresa = await prisma.empresa.update({
+      where: { id: req.params.id },
+      data: { adminAtivo: ativo },
+    });
+    await registrarLog({
+      tipo: 'ALTERACAO_CRITICA', empresaId: empresa.id, empresaNome: empresa.nome, ator: 'super-admin',
+      acao: ativo ? 'Acesso do admin da loja reativado' : 'Acesso do admin da loja bloqueado',
+    });
+    res.json(serializeEmpresa(empresa));
+  } catch (error) {
+    return handlePrismaError(error, res);
+  }
+}));
+
+/**
+ * @openapi
+ * /empresas/{id}/reset-senha:
+ *   post:
+ *     summary: Redefine a senha do administrador da empresa
+ *     tags: [Empresas]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/SenhaInput'
+ *     responses:
+ *       200:
+ *         description: Senha redefinida
+ *       400:
+ *         description: Senha inválida
+ *       404:
+ *         description: Empresa não encontrada
+ */
+router.post('/:id/reset-senha', asyncHandler(async (req, res) => {
+  const { senha } = req.body;
+  if (!senha || String(senha).length < 6) {
+    return res.status(400).json({ error: 'Campo "senha" é obrigatório e deve ter ao menos 6 caracteres' });
+  }
+
+  const senhaHash = await bcrypt.hash(senha, SALT_ROUNDS);
+
+  try {
+    const empresa = await prisma.empresa.update({
+      where: { id: req.params.id },
+      data: { senhaHash },
+    });
+    await registrarLog({
+      tipo: 'ALTERACAO_CRITICA', empresaId: empresa.id, empresaNome: empresa.nome, ator: 'super-admin', acao: 'Senha do admin da loja redefinida',
+    });
+    res.json(serializeEmpresa(empresa));
+  } catch (error) {
+    return handlePrismaError(error, res);
+  }
+}));
+
+/**
+ * @openapi
+ * /empresas/{id}:
+ *   delete:
+ *     summary: Remove uma empresa
+ *     tags: [Empresas]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       204:
+ *         description: Empresa removida
+ *       404:
+ *         description: Empresa não encontrada
+ */
+router.delete('/:id', asyncHandler(async (req, res) => {
+  try {
+    await prisma.empresa.delete({ where: { id: req.params.id } });
+    res.status(204).send();
+  } catch (error) {
+    return handlePrismaError(error, res);
+  }
+}));
+
+/**
+ * @openapi
+ * /empresas/{id}/admin-login:
+ *   post:
+ *     summary: Login do administrador da empresa (painel /{slug}/admin)
+ *     tags: [Empresas]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [usuario, senha]
+ *             properties:
+ *               usuario: { type: string }
+ *               senha: { type: string }
+ *     responses:
+ *       200:
+ *         description: Login válido
+ *       401:
+ *         description: Usuário ou senha inválidos, ou acesso desativado
+ */
+router.post('/:id/admin-login', asyncHandler(async (req, res) => {
+  const { usuario, senha } = req.body;
+  if (!usuario || !senha) {
+    return res.status(400).json({ error: 'Campos "usuario" e "senha" são obrigatórios' });
+  }
+
+  const empresa = await prisma.empresa.findUnique({ where: { id: req.params.id } });
+  if (!empresa || empresa.usuario !== usuario) {
+    return res.status(401).json({ error: 'Usuário ou senha inválidos' });
+  }
+
+  if (!empresa.empresaAtiva || !empresa.adminAtivo) {
+    await registrarLog({
+      tipo: 'ACESSO', empresaId: empresa.id, empresaNome: empresa.nome, ator: usuario,
+      acao: 'Tentativa de login no admin com acesso desativado',
+    });
+    return res.status(401).json({ error: 'Acesso desativado. Fale com o suporte da plataforma.' });
+  }
+
+  const senhaValida = await bcrypt.compare(senha, empresa.senhaHash);
+  if (!senhaValida) {
+    await registrarLog({
+      tipo: 'ACESSO', empresaId: empresa.id, empresaNome: empresa.nome, ator: usuario, acao: 'Login no admin falhou (senha incorreta)',
+    });
+    return res.status(401).json({ error: 'Usuário ou senha inválidos' });
+  }
+
+  await registrarLog({ tipo: 'ACESSO', empresaId: empresa.id, empresaNome: empresa.nome, ator: usuario, acao: 'Login no admin da loja' });
+  res.json({ id: empresa.id, nome: empresa.nome, usuario: empresa.usuario });
+}));
+
+/**
+ * @openapi
+ * /empresas/{id}/comissao:
+ *   patch:
+ *     summary: Define o percentual de comissão da plataforma sobre as vendas desta empresa (5 a 20%)
+ *     tags: [Empresas]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [comissaoPercent]
+ *             properties:
+ *               comissaoPercent: { type: number, minimum: 5, maximum: 20 }
+ *     responses:
+ *       200:
+ *         description: Comissão atualizada
+ *       400:
+ *         description: Valor fora do intervalo permitido
+ *       404:
+ *         description: Empresa não encontrada
+ */
+router.patch('/:id/comissao', asyncHandler(async (req, res) => {
+  const valor = Number(req.body.comissaoPercent);
+  if (Number.isNaN(valor) || valor < 5 || valor > 20) {
+    return res.status(400).json({ error: 'O percentual de comissão deve estar entre 5 e 20' });
+  }
+
+  try {
+    const empresa = await prisma.empresa.update({
+      where: { id: req.params.id },
+      data: { comissaoPercent: valor },
+    });
+    await registrarLog({
+      tipo: 'ALTERACAO_CRITICA', empresaId: empresa.id, empresaNome: empresa.nome, ator: 'super-admin',
+      acao: `Comissão alterada para ${valor}%`,
+    });
+    res.json(serializeEmpresa(empresa));
+  } catch (error) {
+    return handlePrismaError(error, res);
+  }
+}));
+
+/**
+ * @openapi
+ * /empresas/{id}/plano:
+ *   patch:
+ *     summary: Atribui (ou remove) o plano de assinatura da empresa; ao atribuir, sincroniza a comissão com a do plano
+ *     tags: [Empresas]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               planoId: { type: string, format: uuid, nullable: true }
+ *     responses:
+ *       200:
+ *         description: Plano atribuído
+ *       404:
+ *         description: Empresa ou plano não encontrado
+ */
+router.patch('/:id/plano', asyncHandler(async (req, res) => {
+  const { planoId } = req.body;
+
+  if (!planoId) {
+    try {
+      const empresa = await prisma.empresa.update({ where: { id: req.params.id }, data: { planoId: null } });
+      return res.json(serializeEmpresa(empresa));
+    } catch (error) {
+      return handlePrismaError(error, res);
+    }
+  }
+
+  const plano = await prisma.plano.findUnique({ where: { id: planoId } });
+  if (!plano) {
+    return res.status(404).json({ error: 'Plano não encontrado' });
+  }
+
+  try {
+    const empresa = await prisma.empresa.update({
+      where: { id: req.params.id },
+      data: { planoId: plano.id, comissaoPercent: plano.comissaoPercent },
+    });
+    await registrarLog({
+      tipo: 'ALTERACAO_CRITICA', empresaId: empresa.id, empresaNome: empresa.nome, ator: 'super-admin',
+      acao: `Plano "${plano.nome}" atribuído (comissão sincronizada para ${plano.comissaoPercent}%)`,
+    });
+    res.json(serializeEmpresa(empresa));
+  } catch (error) {
+    return handlePrismaError(error, res);
+  }
+}));
+
+/**
+ * @openapi
+ * /empresas/{id}/loja-aberta:
+ *   patch:
+ *     summary: Botão de emergência — abre ou fecha a loja manualmente, independente do horário automático
+ *     tags: [Empresas]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [aberta]
+ *             properties:
+ *               aberta: { type: boolean }
+ *     responses:
+ *       200:
+ *         description: Status atualizado
+ *       404:
+ *         description: Empresa não encontrada
+ */
+router.patch('/:id/loja-aberta', asyncHandler(async (req, res) => {
+  const { aberta } = req.body;
+  if (typeof aberta !== 'boolean') {
+    return res.status(400).json({ error: 'Campo "aberta" é obrigatório e deve ser booleano' });
+  }
+
+  try {
+    const empresa = await prisma.empresa.update({
+      where: { id: req.params.id },
+      data: { lojaAbertaManual: aberta },
+    });
+    res.json(serializeEmpresa(empresa));
+  } catch (error) {
+    return handlePrismaError(error, res);
+  }
+}));
+
+/**
+ * @openapi
+ * /empresas/{id}/operacional:
+ *   put:
+ *     summary: Atualiza as configurações operacionais (horário automático, tempo estimado, pedido mínimo)
+ *     tags: [Empresas]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               usarHorarioAutomatico: { type: boolean }
+ *               tempoEstimadoMin: { type: integer, nullable: true }
+ *               tempoEstimadoMax: { type: integer, nullable: true }
+ *               pedidoMinimo: { type: number }
+ *     responses:
+ *       200:
+ *         description: Configurações atualizadas
+ *       400:
+ *         description: Dados inválidos
+ *       404:
+ *         description: Empresa não encontrada
+ */
+router.put('/:id/operacional', asyncHandler(async (req, res) => {
+  const { usarHorarioAutomatico, tempoEstimadoMin, tempoEstimadoMax, pedidoMinimo } = req.body;
+
+  const erros = [];
+  if (pedidoMinimo !== undefined && (Number.isNaN(Number(pedidoMinimo)) || Number(pedidoMinimo) < 0)) {
+    erros.push('Campo "pedidoMinimo" deve ser maior ou igual a zero');
+  }
+  if (tempoEstimadoMin !== undefined && tempoEstimadoMin !== null && (!Number.isInteger(Number(tempoEstimadoMin)) || Number(tempoEstimadoMin) < 0)) {
+    erros.push('Campo "tempoEstimadoMin" deve ser um inteiro maior ou igual a zero');
+  }
+  if (tempoEstimadoMax !== undefined && tempoEstimadoMax !== null && (!Number.isInteger(Number(tempoEstimadoMax)) || Number(tempoEstimadoMax) < 0)) {
+    erros.push('Campo "tempoEstimadoMax" deve ser um inteiro maior ou igual a zero');
+  }
+  if (erros.length) {
+    return res.status(400).json({ error: erros.join('; ') });
+  }
+
+  try {
+    const empresa = await prisma.empresa.update({
+      where: { id: req.params.id },
+      data: {
+        ...(usarHorarioAutomatico !== undefined ? { usarHorarioAutomatico } : {}),
+        ...(tempoEstimadoMin !== undefined ? { tempoEstimadoMin: tempoEstimadoMin === null ? null : Number(tempoEstimadoMin) } : {}),
+        ...(tempoEstimadoMax !== undefined ? { tempoEstimadoMax: tempoEstimadoMax === null ? null : Number(tempoEstimadoMax) } : {}),
+        ...(pedidoMinimo !== undefined ? { pedidoMinimo: Number(pedidoMinimo) } : {}),
+      },
+    });
+    res.json(serializeEmpresa(empresa));
+  } catch (error) {
+    return handlePrismaError(error, res);
+  }
+}));
+
+/**
+ * @openapi
+ * /empresas/{id}/frete-config:
+ *   put:
+ *     summary: Define o valor de frete grátis acima de X reais (as taxas por bairro ficam em /zonas-entrega)
+ *     tags: [Empresas]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               freteGratisAcimaDe: { type: number, nullable: true }
+ *     responses:
+ *       200:
+ *         description: Configuração atualizada
+ *       404:
+ *         description: Empresa não encontrada
+ */
+router.put('/:id/frete-config', asyncHandler(async (req, res) => {
+  const { freteGratisAcimaDe } = req.body;
+
+  if (freteGratisAcimaDe !== undefined && freteGratisAcimaDe !== null && (Number.isNaN(Number(freteGratisAcimaDe)) || Number(freteGratisAcimaDe) < 0)) {
+    return res.status(400).json({ error: 'Campo "freteGratisAcimaDe" deve ser maior ou igual a zero' });
+  }
+
+  try {
+    const empresa = await prisma.empresa.update({
+      where: { id: req.params.id },
+      data: { freteGratisAcimaDe: freteGratisAcimaDe === null || freteGratisAcimaDe === '' ? null : Number(freteGratisAcimaDe) },
+    });
+    res.json(serializeEmpresa(empresa));
+  } catch (error) {
+    return handlePrismaError(error, res);
+  }
+}));
+
+const HEX_COLOR_REGEX = /^#[0-9a-fA-F]{6}$/;
+
+/**
+ * @openapi
+ * /empresas/{id}/aparencia:
+ *   put:
+ *     summary: Atualiza a aparência da loja (cores, logo, favicon e configuração do Hero)
+ *     tags: [Empresas]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               corPrimaria: { type: string, example: "#f97316" }
+ *               corSecundaria: { type: string, example: "#dc2626" }
+ *               logoUrl: { type: string }
+ *               faviconUrl: { type: string }
+ *               heroUsarCarrossel: { type: boolean }
+ *               heroTitulo: { type: string }
+ *               heroSubtitulo: { type: string }
+ *               heroBadgeLabel: { type: string }
+ *               heroImagemUrl: { type: string }
+ *               heroLinkUrl: { type: string }
+ *     responses:
+ *       200:
+ *         description: Aparência atualizada
+ *       400:
+ *         description: Dados inválidos
+ *       404:
+ *         description: Empresa não encontrada
+ */
+router.put('/:id/aparencia', asyncHandler(async (req, res) => {
+  const {
+    corPrimaria, corSecundaria, logoUrl, faviconUrl,
+    heroUsarCarrossel, heroTitulo, heroSubtitulo, heroBadgeLabel, heroImagemUrl, heroLinkUrl,
+    termosConteudo,
+  } = req.body;
+
+  const erros = [];
+  if (corPrimaria !== undefined && !HEX_COLOR_REGEX.test(corPrimaria)) erros.push('Cor primária deve ser um hex válido (ex: #f97316)');
+  if (corSecundaria !== undefined && !HEX_COLOR_REGEX.test(corSecundaria)) erros.push('Cor secundária deve ser um hex válido (ex: #dc2626)');
+  if (erros.length) {
+    return res.status(400).json({ error: erros.join('; ') });
+  }
+
+  try {
+    const empresa = await prisma.empresa.update({
+      where: { id: req.params.id },
+      data: {
+        ...(corPrimaria !== undefined ? { corPrimaria } : {}),
+        ...(corSecundaria !== undefined ? { corSecundaria } : {}),
+        ...(logoUrl !== undefined ? { logoUrl: logoUrl || null } : {}),
+        ...(faviconUrl !== undefined ? { faviconUrl: faviconUrl || null } : {}),
+        ...(heroUsarCarrossel !== undefined ? { heroUsarCarrossel } : {}),
+        ...(heroTitulo !== undefined ? { heroTitulo: heroTitulo || null } : {}),
+        ...(heroSubtitulo !== undefined ? { heroSubtitulo: heroSubtitulo || null } : {}),
+        ...(heroBadgeLabel !== undefined ? { heroBadgeLabel: heroBadgeLabel || null } : {}),
+        ...(heroImagemUrl !== undefined ? { heroImagemUrl: heroImagemUrl || null } : {}),
+        ...(heroLinkUrl !== undefined ? { heroLinkUrl: heroLinkUrl || null } : {}),
+        ...(termosConteudo !== undefined ? { termosConteudo: termosConteudo || null } : {}),
+      },
+    });
+    res.json(serializeEmpresa(empresa));
+  } catch (error) {
+    return handlePrismaError(error, res);
+  }
+}));
+
+module.exports = router;

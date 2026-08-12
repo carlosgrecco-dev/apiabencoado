@@ -12,3 +12,486 @@ model GrupoUsuario {
 
   @@map("grupo_usuarios")
 }
+
+model Empresa {
+  id              String   @id @default(uuid()) @db.Uuid
+  nome            String
+  responsavelNome String   @map("responsavel_nome")
+  email           String   @unique
+  telefone        String
+  documento       String   @unique
+  slug            String   @unique
+  usuario         String   @unique
+  senhaHash       String   @map("senha_hash")
+  empresaAtiva    Boolean  @default(true) @map("empresa_ativa")
+  adminAtivo      Boolean  @default(true) @map("admin_ativo")
+
+  // Perfil da loja (vitrine/admin da empresa)
+  descricao             String? // tagline curta, ex: "20 anos de sabor baiano"
+  sobre                 String? // texto livre exibido no rodapé/institucional
+  endereco              String?
+  horarioFuncionamento  String? @map("horario_funcionamento")
+  instagramUrl          String? @map("instagram_url")
+  facebookUrl           String? @map("facebook_url")
+  logoUrl               String? @map("logo_url")
+  taxaEntrega           Decimal @default(7.00) @map("taxa_entrega") @db.Decimal(10, 2)
+
+  // Aparência (CMS da loja)
+  corPrimaria       String  @default("#f97316") @map("cor_primaria")
+  corSecundaria     String  @default("#dc2626") @map("cor_secundaria")
+  faviconUrl        String? @map("favicon_url")
+  heroUsarCarrossel Boolean @default(false) @map("hero_usar_carrossel")
+  heroTitulo        String? @map("hero_titulo")
+  heroSubtitulo     String? @map("hero_subtitulo")
+  heroBadgeLabel    String? @map("hero_badge_label")
+  heroImagemUrl     String? @map("hero_imagem_url")
+  heroLinkUrl       String? @map("hero_link_url")
+
+  /// Percentual (5 a 20) sobre o total vendido destinado ao dono da plataforma, definido pelo Super Admin.
+  comissaoPercent Decimal @default(10.00) @map("comissao_percent") @db.Decimal(5, 2)
+
+  /// Texto livre (institucional) — se vazio, o front usa um modelo padrão de LGPD com os dados da empresa.
+  termosConteudo String? @map("termos_conteudo")
+
+  // Configurações operacionais
+  lojaAbertaManual      Boolean @default(true) @map("loja_aberta_manual") // botão de emergência "Loja Aberta/Fechada"
+  usarHorarioAutomatico Boolean @default(false) @map("usar_horario_automatico") // se true, cruza com HorarioFuncionamento
+  tempoEstimadoMin      Int?    @map("tempo_estimado_min") // minutos, ex: 40
+  tempoEstimadoMax      Int?    @map("tempo_estimado_max") // minutos, ex: 60
+  pedidoMinimo          Decimal @default(0) @map("pedido_minimo") @db.Decimal(10, 2)
+
+  // Frete
+  freteGratisAcimaDe Decimal? @map("frete_gratis_acima_de") @db.Decimal(10, 2)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  motoboys          Motoboy[]
+  movimentosCaixa   MovimentoCaixa[]
+  produtos          Produto[]
+  pedidos           Pedido[]
+  clientes          Cliente[]
+  gatewaysPagamento GatewayPagamento[]
+  heroSlides        HeroSlide[]
+  cupons            Cupom[]
+  horarios          HorarioFuncionamento[]
+  zonasEntrega      ZonaEntrega[]
+  faturas           Fatura[]
+
+  planoId String? @map("plano_id") @db.Uuid
+  plano   Plano?  @relation(fields: [planoId], references: [id], onDelete: SetNull)
+
+  @@map("empresas")
+}
+
+/// Plano de assinatura da plataforma (modelo fixo + comissão), ex: "Básico R$99/mês + 5%".
+model Plano {
+  id              String   @id @default(uuid()) @db.Uuid
+  nome            String
+  valorMensal     Decimal  @default(0) @map("valor_mensal") @db.Decimal(10, 2)
+  comissaoPercent Decimal  @map("comissao_percent") @db.Decimal(5, 2)
+  descricao       String?
+  ativo           Boolean  @default(true)
+  ordem           Int      @default(0)
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  empresas Empresa[]
+
+  @@map("planos")
+}
+
+enum StatusFatura {
+  PENDENTE
+  PAGO
+  ATRASADO
+}
+
+/// Fatura de comissão (+ mensalidade do plano, se houver) gerada por período para uma empresa.
+model Fatura {
+  id              String       @id @default(uuid()) @db.Uuid
+  empresaId       String       @map("empresa_id") @db.Uuid
+  empresa         Empresa      @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  periodoInicio   DateTime     @map("periodo_inicio") @db.Date
+  periodoFim      DateTime     @map("periodo_fim") @db.Date
+  valorVendas     Decimal      @map("valor_vendas") @db.Decimal(12, 2)
+  comissaoPercent Decimal      @map("comissao_percent") @db.Decimal(5, 2)
+  valorComissao   Decimal      @map("valor_comissao") @db.Decimal(10, 2)
+  valorPlano      Decimal      @default(0) @map("valor_plano") @db.Decimal(10, 2)
+  valorTotal      Decimal      @map("valor_total") @db.Decimal(10, 2)
+  status          StatusFatura @default(PENDENTE)
+  vencimento      DateTime     @db.Date
+  pagoEm          DateTime?    @map("pago_em")
+  observacoes     String?
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+
+  @@unique([empresaId, periodoInicio, periodoFim])
+  @@map("faturas")
+}
+
+enum TipoLog {
+  ACESSO
+  ERRO
+  ALTERACAO_CRITICA
+}
+
+/// Log de auditoria leve: acessos, erros do servidor e alterações críticas feitas pelo Super Admin.
+/// Sem FK para Empresa de propósito — o log deve sobreviver mesmo se a empresa for excluída depois.
+model LogAuditoria {
+  id          String   @id @default(uuid()) @db.Uuid
+  tipo        TipoLog
+  empresaId   String?  @map("empresa_id") @db.Uuid
+  empresaNome String?  @map("empresa_nome")
+  ator        String?
+  acao        String
+  detalhes    Json?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("logs_auditoria")
+}
+
+/// Configurações globais da plataforma (dona: Sigma Soluções Digitais). Linha única (singleton).
+model ConfiguracaoPlataforma {
+  id                   String   @id @default(uuid()) @db.Uuid
+  nomeEmpresa          String   @default("Sigma Soluções Digitais") @map("nome_empresa")
+  documento            String?
+  emailSuporte         String?  @map("email_suporte")
+  telefoneSuporte      String?  @map("telefone_suporte")
+  endereco             String?
+  termosPadraoLojistas String?  @map("termos_padrao_lojistas")
+  chavesGlobais        Json?    @map("chaves_globais")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  @@map("configuracoes_plataforma")
+}
+
+/// Horário de funcionamento por dia da semana (0=domingo ... 6=sábado), usado quando usarHorarioAutomatico=true.
+model HorarioFuncionamento {
+  id        String  @id @default(uuid()) @db.Uuid
+  empresaId String  @map("empresa_id") @db.Uuid
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  diaSemana Int     @map("dia_semana")
+  abre      String? // "08:00"
+  fecha     String? // "22:00"
+  fechado   Boolean @default(false)
+
+  @@unique([empresaId, diaSemana])
+  @@map("horarios_funcionamento")
+}
+
+enum TipoZonaEntrega {
+  BAIRRO
+  RAIO_KM
+  FAIXA_DISTANCIA
+}
+
+/// Taxa de entrega por bairro, raio em km, ou faixa de distância. O cálculo automático no checkout hoje
+/// usa apenas o casamento por bairro (RAIO_KM/FAIXA_DISTANCIA exigem geocodificação, fora do escopo atual).
+model ZonaEntrega {
+  id             String          @id @default(uuid()) @db.Uuid
+  empresaId      String          @map("empresa_id") @db.Uuid
+  empresa        Empresa         @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  tipo           TipoZonaEntrega @default(BAIRRO)
+  bairro         String?
+  distanciaDeKm  Decimal?        @map("distancia_de_km") @db.Decimal(6, 2)
+  distanciaAteKm Decimal?        @map("distancia_ate_km") @db.Decimal(6, 2)
+  taxa           Decimal         @db.Decimal(10, 2)
+  ativo          Boolean         @default(true)
+  ordem          Int             @default(0)
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+
+  @@map("zonas_entrega")
+}
+
+model Cliente {
+  id                     String   @id @default(uuid()) @db.Uuid
+  empresaId              String   @map("empresa_id") @db.Uuid
+  empresa                Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  nome                   String
+  telefone               String?
+  email                  String
+  senhaHash              String   @map("senha_hash")
+
+  // Fidelidade: a cada 10 unidades de itens compradas (em pedidos ENTREGUES), 1 item grátis é liberado.
+  totalUnidadesCompradas Int @default(0) @map("total_unidades_compradas")
+  itensGratisGanhos      Int @default(0) @map("itens_gratis_ganhos")
+  itensGratisResgatados  Int @default(0) @map("itens_gratis_resgatados")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  pedidos   Pedido[]
+  enderecos EnderecoCliente[]
+
+  @@unique([empresaId, email])
+  @@map("clientes")
+}
+
+model EnderecoCliente {
+  id          String  @id @default(uuid()) @db.Uuid
+  clienteId   String  @map("cliente_id") @db.Uuid
+  cliente     Cliente @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  rotulo      String // "Casa", "Trabalho", "Apto", etc.
+  cep         String?
+  endereco    String
+  numero      String?
+  bairro      String?
+  cidade      String?
+  referencia  String?
+  principal   Boolean @default(false)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("enderecos_cliente")
+}
+
+enum ProvedorGateway {
+  PIX_MANUAL
+  PAGSEGURO
+  MERCADOPAGO
+  STRIPE
+}
+
+model GatewayPagamento {
+  id            String          @id @default(uuid()) @db.Uuid
+  empresaId     String          @map("empresa_id") @db.Uuid
+  empresa       Empresa         @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  provider      ProvedorGateway
+  nomeExibicao  String          @map("nome_exibicao")
+  ativo         Boolean         @default(false)
+  chavePublica  String?         @map("chave_publica")
+  chaveSecreta  String?         @map("chave_secreta")
+  webhookSecret String?         @map("webhook_secret")
+  createdAt     DateTime        @default(now()) @map("created_at")
+  updatedAt     DateTime        @updatedAt @map("updated_at")
+
+  @@unique([empresaId, provider])
+  @@map("gateways_pagamento")
+}
+
+enum TipoCupom {
+  PERCENTUAL
+  VALOR_FIXO
+  FRETE_GRATIS
+}
+
+model Cupom {
+  id                   String    @id @default(uuid()) @db.Uuid
+  empresaId            String    @map("empresa_id") @db.Uuid
+  empresa              Empresa   @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  codigo               String
+  descricao            String?
+  tipo                 TipoCupom
+  valor                Decimal?  @db.Decimal(10, 2) // percentual (0-100) ou valor fixo em R$; nulo p/ FRETE_GRATIS
+  apenasPrimeiraCompra Boolean   @default(false) @map("apenas_primeira_compra")
+  valorMinimoPedido    Decimal?  @map("valor_minimo_pedido") @db.Decimal(10, 2)
+  usoMaximo            Int?      @map("uso_maximo") // null = ilimitado
+  usosRealizados       Int       @default(0) @map("usos_realizados")
+  validoAte            DateTime? @map("valido_ate")
+  ativo                Boolean   @default(true)
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  pedidos Pedido[]
+
+  @@unique([empresaId, codigo])
+  @@map("cupons")
+}
+
+model Produto {
+  id               String   @id @default(uuid()) @db.Uuid
+  empresaId        String   @map("empresa_id") @db.Uuid
+  empresa          Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  nome             String
+  descricao        String?
+  categoria        String?
+  preco            Decimal  @db.Decimal(10, 2)
+  precoPromocional Decimal? @map("preco_promocional") @db.Decimal(10, 2)
+  fotoUrl          String?  @map("foto_url")
+  ativo            Boolean  @default(true)
+  ordem            Int      @default(0)
+
+  // Estoque & insumos
+  esgotadoHoje     Boolean  @default(false) @map("esgotado_hoje") // pausa rápida sem desativar/excluir o produto
+  controlarEstoque Boolean  @default(false) @map("controlar_estoque")
+  estoqueQtd       Int?     @map("estoque_qtd") // só relevante quando controlarEstoque=true
+
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  itensPedido PedidoItem[]
+  variacoes   ProdutoVariacao[]
+
+  @@map("produtos")
+}
+
+/// Variação/sabor de um produto com estoque próprio (ex: "Camarão", "Frango"). Gerenciado no admin;
+/// a seleção de variação pelo cliente na loja fica fora do escopo desta etapa (marcado como avançado/opcional).
+model ProdutoVariacao {
+  id         String   @id @default(uuid()) @db.Uuid
+  produtoId  String   @map("produto_id") @db.Uuid
+  produto    Produto  @relation(fields: [produtoId], references: [id], onDelete: Cascade)
+  nome       String
+  estoqueQtd Int?     @map("estoque_qtd")
+  ativo      Boolean  @default(true)
+  ordem      Int      @default(0)
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@map("produto_variacoes")
+}
+
+model Motoboy {
+  id         String   @id @default(uuid()) @db.Uuid
+  empresaId  String   @map("empresa_id") @db.Uuid
+  empresa    Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  nome       String
+  telefone   String?
+  taxaPadrao Decimal  @default(7.00) @map("taxa_padrao") @db.Decimal(10, 2)
+  pinHash    String?  @map("pin_hash")
+  ativo      Boolean  @default(true)
+
+  /// Última posição GPS compartilhada pelo motoboy (navigator.geolocation do navegador — gratuito, sem chave de API).
+  latitudeAtual            Decimal?  @map("latitude_atual") @db.Decimal(10, 7)
+  longitudeAtual           Decimal?  @map("longitude_atual") @db.Decimal(10, 7)
+  localizacaoAtualizadaEm  DateTime? @map("localizacao_atualizada_em")
+
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  movimentosCaixa MovimentoCaixa[]
+  pedidos         Pedido[]
+
+  @@map("motoboys")
+}
+
+enum FormaPagamento {
+  PIX
+  DINHEIRO
+  CARTAO
+}
+
+enum StatusPedido {
+  RECEBIDO
+  PREPARANDO
+  SAIU_ENTREGA
+  ENTREGUE
+  CANCELADO
+}
+
+model Pedido {
+  id              String         @id @default(uuid()) @db.Uuid
+  empresaId       String         @map("empresa_id") @db.Uuid
+  empresa         Empresa        @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  numero          Int
+
+  clienteNome     String         @map("cliente_nome")
+  clienteTelefone String         @map("cliente_telefone")
+  endereco        String
+  bairro          String?
+  referencia      String?
+
+  subtotal        Decimal        @db.Decimal(10, 2)
+  taxaEntrega     Decimal        @map("taxa_entrega") @db.Decimal(10, 2)
+  total           Decimal        @db.Decimal(10, 2)
+
+  formaPagamento  FormaPagamento @map("forma_pagamento")
+  trocoPara       Decimal?       @map("troco_para") @db.Decimal(10, 2)
+
+  status          StatusPedido   @default(RECEBIDO)
+  observacoes     String?
+
+  motoboyId          String?  @map("motoboy_id") @db.Uuid
+  motoboy            Motoboy? @relation(fields: [motoboyId], references: [id], onDelete: SetNull)
+  taxaEntregaMotoboy Decimal? @map("taxa_entrega_motoboy") @db.Decimal(10, 2)
+  motoboyPago        Boolean  @default(false) @map("motoboy_pago")
+
+  // Fidelidade
+  clienteId                     String?  @map("cliente_id") @db.Uuid
+  cliente                       Cliente? @relation(fields: [clienteId], references: [id], onDelete: SetNull)
+  itemGratisResgatado           Boolean  @default(false) @map("item_gratis_resgatado")
+  unidadesFidelidadeCreditadas  Int?     @map("unidades_fidelidade_creditadas") // preenchido 1x ao entregar, evita crédito duplicado
+
+  // Cupom aplicado (snapshot do código, pois o cupom pode mudar/expirar depois)
+  cupomId        String?  @map("cupom_id") @db.Uuid
+  cupom          Cupom?   @relation(fields: [cupomId], references: [id], onDelete: SetNull)
+  cupomCodigo    String?  @map("cupom_codigo")
+  descontoCupom  Decimal? @map("desconto_cupom") @db.Decimal(10, 2)
+
+  // Avaliações (só liberadas após ENTREGUE)
+  notaPedido        Int?      @map("nota_pedido")
+  comentarioPedido  String?   @map("comentario_pedido")
+  avaliadoEm        DateTime? @map("avaliado_em")
+  notaMotoboy       Int?      @map("nota_motoboy")
+  comentarioMotoboy String?   @map("comentario_motoboy")
+  motoboyAvaliadoEm DateTime? @map("motoboy_avaliado_em")
+
+  createdAt      DateTime  @default(now()) @map("created_at")
+  preparandoEm   DateTime? @map("preparando_em")
+  saiuEntregaEm  DateTime? @map("saiu_entrega_em")
+  entregueEm     DateTime? @map("entregue_em")
+  canceladoEm    DateTime? @map("cancelado_em")
+
+  itens PedidoItem[]
+
+  @@unique([empresaId, numero])
+  @@map("pedidos")
+}
+
+model PedidoItem {
+  id            String   @id @default(uuid()) @db.Uuid
+  pedidoId      String   @map("pedido_id") @db.Uuid
+  pedido        Pedido   @relation(fields: [pedidoId], references: [id], onDelete: Cascade)
+  produtoId     String?  @map("produto_id") @db.Uuid
+  produto       Produto? @relation(fields: [produtoId], references: [id], onDelete: SetNull)
+  nomeProduto   String   @map("nome_produto")
+  precoUnitario Decimal  @map("preco_unitario") @db.Decimal(10, 2)
+  quantidade    Int
+  observacoes   String?
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@map("pedido_itens")
+}
+
+enum TipoMovimentoCaixa {
+  ENTRADA
+  SAIDA
+  SANGRIA
+  FECHAMENTO
+}
+
+/// Tabela unificada de caixa: entradas, saídas e fechamentos de turno, tudo em um só lugar.
+model MovimentoCaixa {
+  id            String              @id @default(uuid()) @db.Uuid
+  empresaId     String              @map("empresa_id") @db.Uuid
+  empresa       Empresa             @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  motoboyId     String?             @map("motoboy_id") @db.Uuid
+  motoboy       Motoboy?            @relation(fields: [motoboyId], references: [id], onDelete: SetNull)
+  tipo          TipoMovimentoCaixa
+  descricao     String?
+  valor         Decimal             @db.Decimal(10, 2)
+  dataMovimento DateTime            @default(now()) @map("data_movimento") @db.Date
+  createdAt     DateTime            @default(now()) @map("created_at")
+
+  @@map("movimentos_caixa")
+}
+
+/// Slide do carrossel do Hero (usado só quando Empresa.heroUsarCarrossel = true).
+model HeroSlide {
+  id          String   @id @default(uuid()) @db.Uuid
+  empresaId   String   @map("empresa_id") @db.Uuid
+  empresa     Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  imagemUrl   String   @map("imagem_url")
+  titulo      String
+  subtitulo   String?
+  badgeLabel  String?  @map("badge_label")
+  linkUrl     String?  @map("link_url")
+  ordem       Int      @default(0)
+  ativo       Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("hero_slides")
+}
