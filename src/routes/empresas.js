@@ -310,6 +310,11 @@ router.get('/slug/:slug', asyncHandler(async (req, res) => {
       heroImagemUrl: true,
       heroLinkUrl: true,
       termosConteudo: true,
+      googleBusinessReviewUrl: true,
+      fidelidadeLogoUrl: true,
+      fidelidadeValidadeDias: true,
+      fidelidadeAvisoFaltam: true,
+      fidelidadeNomeItem: true,
       lojaAbertaManual: true,
       usarHorarioAutomatico: true,
       tempoEstimadoMin: true,
@@ -389,13 +394,33 @@ router.get('/:id', asyncHandler(async (req, res) => {
 router.post('/', asyncHandler(async (req, res) => {
   const {
     nome, responsavelNome, email, telefone, documento, slug, usuario, senha,
-    empresaAtiva, adminAtivo,
+    empresaAtiva, adminAtivo, planoId, comissaoPercent,
   } = req.body;
 
   const erros = validarPayload(req.body);
   if (!senha || String(senha).length < 6) {
     erros.push('Campo "senha" é obrigatório e deve ter ao menos 6 caracteres');
   }
+
+  let plano = null;
+  if (planoId) {
+    plano = await prisma.plano.findUnique({ where: { id: planoId } });
+    if (!plano) {
+      erros.push('Plano informado não encontrado');
+    }
+  }
+
+  // Sem plano, o super admin pode definir a comissão avulsa (1 a 20%) já no cadastro.
+  let comissaoAvulsa = null;
+  if (!planoId && comissaoPercent !== undefined && comissaoPercent !== null && comissaoPercent !== '') {
+    const valor = Number(comissaoPercent);
+    if (Number.isNaN(valor) || valor < 1 || valor > 20) {
+      erros.push('Campo "comissaoPercent" deve estar entre 1 e 20');
+    } else {
+      comissaoAvulsa = valor;
+    }
+  }
+
   if (erros.length) {
     return res.status(400).json({ error: erros.join('; ') });
   }
@@ -415,8 +440,23 @@ router.post('/', asyncHandler(async (req, res) => {
         senhaHash,
         empresaAtiva: empresaAtiva ?? true,
         adminAtivo: adminAtivo ?? true,
+        ...(plano
+          ? { planoId: plano.id, comissaoPercent: plano.comissaoPercent }
+          : comissaoAvulsa !== null ? { comissaoPercent: comissaoAvulsa } : {}),
       },
     });
+
+    if (plano) {
+      await registrarLog({
+        tipo: 'ALTERACAO_CRITICA', empresaId: empresa.id, empresaNome: empresa.nome, ator: 'super-admin',
+        acao: `Empresa cadastrada já com o plano "${plano.nome}" (comissão ${plano.comissaoPercent}%)`,
+      });
+    } else if (comissaoAvulsa !== null) {
+      await registrarLog({
+        tipo: 'ALTERACAO_CRITICA', empresaId: empresa.id, empresaNome: empresa.nome, ator: 'super-admin',
+        acao: `Empresa cadastrada sem plano, com comissão avulsa de ${comissaoAvulsa}%`,
+      });
+    }
 
     res.status(201).json(serializeEmpresa(empresa));
   } catch (error) {
@@ -764,6 +804,48 @@ router.patch('/:id/comissao', asyncHandler(async (req, res) => {
 
 /**
  * @openapi
+ * /empresas/{id}/comissao-visibilidade:
+ *   patch:
+ *     summary: Mostra ou oculta o card "Comissão da plataforma" no CRM do próprio tenant
+ *     tags: [Empresas]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [ocultarComissaoTenant]
+ *             properties:
+ *               ocultarComissaoTenant: { type: boolean }
+ *     responses:
+ *       200:
+ *         description: Visibilidade atualizada
+ *       404:
+ *         description: Empresa não encontrada
+ */
+router.patch('/:id/comissao-visibilidade', asyncHandler(async (req, res) => {
+  const { ocultarComissaoTenant } = req.body;
+  if (typeof ocultarComissaoTenant !== 'boolean') {
+    return res.status(400).json({ error: 'Campo "ocultarComissaoTenant" é obrigatório e deve ser booleano' });
+  }
+
+  try {
+    const empresa = await prisma.empresa.update({
+      where: { id: req.params.id },
+      data: { ocultarComissaoTenant },
+    });
+    await registrarLog({
+      tipo: 'ALTERACAO_CRITICA', empresaId: empresa.id, empresaNome: empresa.nome, ator: 'super-admin',
+      acao: `Comissão da plataforma ${ocultarComissaoTenant ? 'ocultada' : 'exibida'} para o lojista`,
+    });
+    res.json(serializeEmpresa(empresa));
+  } catch (error) {
+    return handlePrismaError(error, res);
+  }
+}));
+
+/**
+ * @openapi
  * /empresas/{id}/plano:
  *   patch:
  *     summary: Atribui (ou remove) o plano de assinatura da empresa; ao atribuir, sincroniza a comissão com a do plano
@@ -966,6 +1048,74 @@ router.put('/:id/frete-config', asyncHandler(async (req, res) => {
   }
 }));
 
+/**
+ * @openapi
+ * /empresas/{id}/fidelidade-config:
+ *   put:
+ *     summary: Atualiza as configurações do programa de fidelidade (logo, prazo de resgate, aviso e nome do item)
+ *     tags: [Empresas]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               fidelidadeLogoUrl: { type: string, nullable: true }
+ *               fidelidadeValidadeDias: { type: integer, nullable: true }
+ *               fidelidadeAvisoFaltam: { type: integer, nullable: true }
+ *               fidelidadeNomeItem: { type: string, nullable: true }
+ *     responses:
+ *       200:
+ *         description: Configuração atualizada
+ *       400:
+ *         description: Dados inválidos
+ *       404:
+ *         description: Empresa não encontrada
+ */
+router.put('/:id/fidelidade-config', asyncHandler(async (req, res) => {
+  const { fidelidadeLogoUrl, fidelidadeValidadeDias, fidelidadeAvisoFaltam, fidelidadeNomeItem } = req.body;
+
+  const erros = [];
+  if (fidelidadeValidadeDias !== undefined && fidelidadeValidadeDias !== null && fidelidadeValidadeDias !== '') {
+    if (!Number.isInteger(Number(fidelidadeValidadeDias)) || Number(fidelidadeValidadeDias) < 1) {
+      erros.push('Campo "fidelidadeValidadeDias" deve ser um inteiro maior ou igual a 1');
+    }
+  }
+  if (fidelidadeAvisoFaltam !== undefined && fidelidadeAvisoFaltam !== null && fidelidadeAvisoFaltam !== '') {
+    const valor = Number(fidelidadeAvisoFaltam);
+    if (!Number.isInteger(valor) || valor < 1 || valor > 9) {
+      erros.push('Campo "fidelidadeAvisoFaltam" deve ser um inteiro entre 1 e 9');
+    }
+  }
+  if (erros.length) {
+    return res.status(400).json({ error: erros.join('; ') });
+  }
+
+  try {
+    const empresa = await prisma.empresa.update({
+      where: { id: req.params.id },
+      data: {
+        ...(fidelidadeLogoUrl !== undefined ? { fidelidadeLogoUrl: fidelidadeLogoUrl || null } : {}),
+        ...(fidelidadeValidadeDias !== undefined
+          ? { fidelidadeValidadeDias: fidelidadeValidadeDias === null || fidelidadeValidadeDias === '' ? null : Number(fidelidadeValidadeDias) }
+          : {}),
+        ...(fidelidadeAvisoFaltam !== undefined
+          ? { fidelidadeAvisoFaltam: fidelidadeAvisoFaltam === null || fidelidadeAvisoFaltam === '' ? null : Number(fidelidadeAvisoFaltam) }
+          : {}),
+        ...(fidelidadeNomeItem !== undefined ? { fidelidadeNomeItem: fidelidadeNomeItem || null } : {}),
+      },
+    });
+    res.json(serializeEmpresa(empresa));
+  } catch (error) {
+    return handlePrismaError(error, res);
+  }
+}));
+
 const HEX_COLOR_REGEX = /^#[0-9a-fA-F]{6}$/;
 
 /**
@@ -1008,7 +1158,7 @@ router.put('/:id/aparencia', asyncHandler(async (req, res) => {
   const {
     corPrimaria, corSecundaria, logoUrl, faviconUrl,
     heroUsarCarrossel, heroTitulo, heroSubtitulo, heroBadgeLabel, heroImagemUrl, heroLinkUrl,
-    termosConteudo,
+    termosConteudo, googleBusinessReviewUrl,
   } = req.body;
 
   const erros = [];
@@ -1033,6 +1183,7 @@ router.put('/:id/aparencia', asyncHandler(async (req, res) => {
         ...(heroImagemUrl !== undefined ? { heroImagemUrl: heroImagemUrl || null } : {}),
         ...(heroLinkUrl !== undefined ? { heroLinkUrl: heroLinkUrl || null } : {}),
         ...(termosConteudo !== undefined ? { termosConteudo: termosConteudo || null } : {}),
+        ...(googleBusinessReviewUrl !== undefined ? { googleBusinessReviewUrl: googleBusinessReviewUrl || null } : {}),
       },
     });
     res.json(serializeEmpresa(empresa));

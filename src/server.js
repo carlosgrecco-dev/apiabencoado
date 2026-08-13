@@ -1,4 +1,5 @@
 require('dotenv/config');
+const path = require('node:path');
 const express = require('express');
 const cors = require('cors');
 const swaggerUi = require('swagger-ui-express');
@@ -8,6 +9,7 @@ const empresasRouter = require('./routes/empresas');
 const motoboysRouter = require('./routes/motoboys');
 const movimentosCaixaRouter = require('./routes/movimentosCaixa');
 const produtosRouter = require('./routes/produtos');
+const categoriasRouter = require('./routes/categorias');
 const pedidosRouter = require('./routes/pedidos');
 const clientesRouter = require('./routes/clientes');
 const crmRouter = require('./routes/crm');
@@ -19,18 +21,22 @@ const horariosRouter = require('./routes/horarios');
 const zonasEntregaRouter = require('./routes/zonasEntrega');
 const freteRouter = require('./routes/frete');
 const produtoVariacoesRouter = require('./routes/produtoVariacoes');
+const produtoGruposOpcaoRouter = require('./routes/produtoGruposOpcao');
 const planosRouter = require('./routes/planos');
 const faturasRouter = require('./routes/faturas');
 const logsRouter = require('./routes/logs');
 const configuracoesPlataformaRouter = require('./routes/configuracoesPlataforma');
+const uploadRouter = require('./routes/upload');
 const serializeDecimals = require('./lib/serializeDecimals');
 const { registrarLog } = require('./lib/auditLog');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+app.set('trust proxy', true);
 app.use(cors());
 app.use(express.json());
+app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
 
 // Garante que campos Decimal (preco, valor, taxa...) saiam como number no JSON, não string.
 app.use((req, res, next) => {
@@ -101,6 +107,7 @@ app.use('/empresas', empresasRouter);
 app.use('/empresas/:empresaId/motoboys', motoboysRouter);
 app.use('/empresas/:empresaId/movimentos-caixa', movimentosCaixaRouter);
 app.use('/empresas/:empresaId/produtos', produtosRouter);
+app.use('/empresas/:empresaId/categorias', categoriasRouter);
 app.use('/empresas/:empresaId/pedidos', pedidosRouter);
 app.use('/empresas/:empresaId/clientes', clientesRouter);
 app.use('/empresas/:empresaId/crm', crmRouter);
@@ -112,10 +119,12 @@ app.use('/empresas/:empresaId/horarios', horariosRouter);
 app.use('/empresas/:empresaId/zonas-entrega', zonasEntregaRouter);
 app.use('/empresas/:empresaId/frete', freteRouter);
 app.use('/empresas/:empresaId/produtos/:produtoId/variacoes', produtoVariacoesRouter);
+app.use('/empresas/:empresaId/produtos/:produtoId/grupos-opcao', produtoGruposOpcaoRouter);
 app.use('/planos', planosRouter);
 app.use('/faturas', faturasRouter);
 app.use('/logs', logsRouter);
 app.use('/configuracoes-plataforma', configuracoesPlataformaRouter);
+app.use('/uploads', uploadRouter);
 
 app.use((err, req, res, next) => {
   console.error(err);

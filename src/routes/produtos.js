@@ -39,6 +39,33 @@ const comDisponibilidade = (produto) => ({
   disponivel: produto.ativo && !produto.esgotadoHoje && (!produto.controlarEstoque || (produto.estoqueQtd ?? 0) > 0),
 });
 
+/** Visão pública dos grupos de opção: só grupos com ao menos 1 opção ativa, só opções ativas. */
+const comGruposOpcaoPublicos = (produto) => {
+  if (!produto.gruposOpcao) return produto;
+  return {
+    ...produto,
+    gruposOpcao: produto.gruposOpcao
+      .map((grupo) => ({ ...grupo, opcoes: grupo.opcoes.filter((o) => o.ativo) }))
+      .filter((grupo) => grupo.opcoes.length > 0),
+  };
+};
+
+const INCLUDE_GRUPOS_OPCAO = {
+  categoria: true,
+  gruposOpcao: {
+    orderBy: [{ ordem: 'asc' }, { createdAt: 'asc' }],
+    include: { opcoes: { orderBy: [{ ordem: 'asc' }, { nome: 'asc' }] } },
+  },
+};
+
+/** Garante que categoriaId (se informado) existe e pertence à mesma empresa do produto. */
+const validarCategoria = async (empresaId, categoriaId) => {
+  if (!categoriaId) return null;
+  const categoria = await prisma.categoria.findFirst({ where: { id: categoriaId, empresaId } });
+  if (!categoria) return 'Categoria informada não encontrada';
+  return null;
+};
+
 /**
  * @openapi
  * components:
@@ -50,7 +77,7 @@ const comDisponibilidade = (produto) => ({
  *         empresaId: { type: string, format: uuid }
  *         nome: { type: string }
  *         descricao: { type: string, nullable: true }
- *         categoria: { type: string, nullable: true }
+ *         categoriaId: { type: string, format: uuid, nullable: true }
  *         preco: { type: number }
  *         precoPromocional: { type: number, nullable: true }
  *         fotoUrl: { type: string, nullable: true }
@@ -62,7 +89,7 @@ const comDisponibilidade = (produto) => ({
  *       properties:
  *         nome: { type: string }
  *         descricao: { type: string }
- *         categoria: { type: string }
+ *         categoriaId: { type: string, format: uuid }
  *         preco: { type: number }
  *         precoPromocional: { type: number }
  *         fotoUrl: { type: string }
@@ -85,26 +112,27 @@ const comDisponibilidade = (produto) => ({
  *         name: ativo
  *         schema: { type: boolean }
  *       - in: query
- *         name: categoria
- *         schema: { type: string }
+ *         name: categoriaId
+ *         schema: { type: string, format: uuid }
  *     responses:
  *       200:
  *         description: Lista de produtos
  */
 router.get('/', asyncHandler(async (req, res) => {
-  const { ativo, categoria } = req.query;
+  const { ativo, categoriaId } = req.query;
   const where = {
     empresaId: req.params.empresaId,
     ...(ativo !== undefined ? { ativo: ativo === 'true' } : {}),
-    ...(categoria ? { categoria } : {}),
+    ...(categoriaId ? { categoriaId } : {}),
   };
 
   const produtos = await prisma.produto.findMany({
     where,
+    include: INCLUDE_GRUPOS_OPCAO,
     orderBy: [{ ordem: 'asc' }, { nome: 'asc' }],
   });
 
-  res.json(produtos.map(comDisponibilidade));
+  res.json(produtos.map(comDisponibilidade).map(comGruposOpcaoPublicos));
 }));
 
 /**
@@ -131,13 +159,14 @@ router.get('/', asyncHandler(async (req, res) => {
 router.get('/:id', asyncHandler(async (req, res) => {
   const produto = await prisma.produto.findFirst({
     where: { id: req.params.id, empresaId: req.params.empresaId },
+    include: INCLUDE_GRUPOS_OPCAO,
   });
 
   if (!produto) {
     return res.status(404).json({ error: 'Produto não encontrado' });
   }
 
-  res.json(comDisponibilidade(produto));
+  res.json(comGruposOpcaoPublicos(comDisponibilidade(produto)));
 }));
 
 /**
@@ -165,13 +194,17 @@ router.get('/:id', asyncHandler(async (req, res) => {
  */
 router.post('/', asyncHandler(async (req, res) => {
   const {
-    nome, descricao, categoria, preco, precoPromocional, fotoUrl, ativo, ordem,
-    controlarEstoque, estoqueQtd,
+    nome, descricao, categoriaId, preco, precoPromocional, fotoUrl, ativo, ordem,
+    controlarEstoque, estoqueQtd, ehCombo,
   } = req.body;
 
   const erros = validarPayload(req.body);
   if (erros.length) {
     return res.status(400).json({ error: erros.join('; ') });
+  }
+  const erroCategoria = await validarCategoria(req.params.empresaId, categoriaId);
+  if (erroCategoria) {
+    return res.status(400).json({ error: erroCategoria });
   }
 
   const produto = await prisma.produto.create({
@@ -179,7 +212,7 @@ router.post('/', asyncHandler(async (req, res) => {
       empresaId: req.params.empresaId,
       nome,
       descricao: descricao || null,
-      categoria: categoria || null,
+      categoriaId: categoriaId || null,
       preco,
       precoPromocional: precoPromocional || null,
       fotoUrl: fotoUrl || null,
@@ -187,7 +220,9 @@ router.post('/', asyncHandler(async (req, res) => {
       ...(ordem !== undefined ? { ordem } : {}),
       ...(controlarEstoque !== undefined ? { controlarEstoque } : {}),
       ...(estoqueQtd !== undefined ? { estoqueQtd: estoqueQtd === null || estoqueQtd === '' ? null : Number(estoqueQtd) } : {}),
+      ...(ehCombo !== undefined ? { ehCombo } : {}),
     },
+    include: { categoria: true },
   });
 
   res.status(201).json(comDisponibilidade(produto));
@@ -222,13 +257,17 @@ router.post('/', asyncHandler(async (req, res) => {
  */
 router.put('/:id', asyncHandler(async (req, res) => {
   const {
-    nome, descricao, categoria, preco, precoPromocional, fotoUrl, ativo, ordem,
-    controlarEstoque, estoqueQtd,
+    nome, descricao, categoriaId, preco, precoPromocional, fotoUrl, ativo, ordem,
+    controlarEstoque, estoqueQtd, ehCombo,
   } = req.body;
 
   const erros = validarPayload(req.body);
   if (erros.length) {
     return res.status(400).json({ error: erros.join('; ') });
+  }
+  const erroCategoria = await validarCategoria(req.params.empresaId, categoriaId);
+  if (erroCategoria) {
+    return res.status(400).json({ error: erroCategoria });
   }
 
   const existente = await prisma.produto.findFirst({
@@ -244,7 +283,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
       data: {
         nome,
         descricao: descricao || null,
-        categoria: categoria || null,
+        categoriaId: categoriaId || null,
         preco,
         precoPromocional: precoPromocional || null,
         fotoUrl: fotoUrl || null,
@@ -252,7 +291,9 @@ router.put('/:id', asyncHandler(async (req, res) => {
         ...(ordem !== undefined ? { ordem } : {}),
         ...(controlarEstoque !== undefined ? { controlarEstoque } : {}),
         ...(estoqueQtd !== undefined ? { estoqueQtd: estoqueQtd === null || estoqueQtd === '' ? null : Number(estoqueQtd) } : {}),
+        ...(ehCombo !== undefined ? { ehCombo } : {}),
       },
+      include: { categoria: true },
     });
 
     res.json(comDisponibilidade(produto));

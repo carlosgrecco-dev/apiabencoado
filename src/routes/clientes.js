@@ -193,7 +193,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
 router.get('/:id/pedidos', asyncHandler(async (req, res) => {
   const pedidos = await prisma.pedido.findMany({
     where: { clienteId: req.params.id, empresaId: req.params.empresaId },
-    include: { itens: true },
+    include: { itens: { include: { opcoesSelecionadas: true } } },
     orderBy: { createdAt: 'desc' },
   });
   res.json(pedidos);

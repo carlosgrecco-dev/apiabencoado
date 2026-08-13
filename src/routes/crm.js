@@ -108,6 +108,7 @@ router.get('/resumo', asyncHandler(async (req, res) => {
     motoboyClosing: Array.from(motoboyMap.values()),
     comissaoPercent,
     comissaoValor,
+    mostrarComissao: !req.empresa.ocultarComissaoTenant,
   });
 }));
 

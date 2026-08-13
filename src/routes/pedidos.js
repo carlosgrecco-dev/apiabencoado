@@ -4,6 +4,7 @@ const loadEmpresa = require('../lib/loadEmpresa');
 const validarCupom = require('../lib/validarCupom');
 const { calcularStatusLoja } = require('../lib/statusLoja');
 const { calcularFrete } = require('../lib/calcularFrete');
+const { disponibilidadeFidelidade } = require('../lib/fidelidade');
 
 const router = Router({ mergeParams: true });
 
@@ -116,7 +117,7 @@ router.get('/', asyncHandler(async (req, res) => {
 
   const pedidos = await prisma.pedido.findMany({
     where,
-    include: { itens: true, motoboy: { select: { id: true, nome: true, latitudeAtual: true, longitudeAtual: true, localizacaoAtualizadaEm: true } } },
+    include: { itens: { include: { opcoesSelecionadas: true } }, motoboy: { select: { id: true, nome: true, latitudeAtual: true, longitudeAtual: true, localizacaoAtualizadaEm: true } } },
     orderBy: { createdAt: 'desc' },
   });
 
@@ -147,7 +148,7 @@ router.get('/', asyncHandler(async (req, res) => {
 router.get('/:id', asyncHandler(async (req, res) => {
   const pedido = await prisma.pedido.findFirst({
     where: { id: req.params.id, empresaId: req.params.empresaId },
-    include: { itens: true, motoboy: { select: { id: true, nome: true, latitudeAtual: true, longitudeAtual: true, localizacaoAtualizadaEm: true } } },
+    include: { itens: { include: { opcoesSelecionadas: true } }, motoboy: { select: { id: true, nome: true, latitudeAtual: true, longitudeAtual: true, localizacaoAtualizadaEm: true } } },
   });
 
   if (!pedido) {
@@ -212,6 +213,7 @@ router.post('/', asyncHandler(async (req, res) => {
   const produtoIds = [...new Set(itens.map((i) => i.produtoId))];
   const produtos = await prisma.produto.findMany({
     where: { id: { in: produtoIds }, empresaId: req.params.empresaId, ativo: true },
+    include: { gruposOpcao: { include: { opcoes: true } } },
   });
   const produtoPorId = new Map(produtos.map((p) => [p.id, p]));
 
@@ -231,13 +233,51 @@ router.post('/', asyncHandler(async (req, res) => {
     if (produto.controlarEstoque && (produto.estoqueQtd ?? 0) < quantidade) {
       return res.status(400).json({ error: `Estoque insuficiente para o produto "${produto.nome}"` });
     }
-    const precoUnitario = produto.precoPromocional ?? produto.preco;
+
+    const opcaoIdsSelecionados = Array.isArray(item.opcoes) ? [...new Set(item.opcoes)] : [];
+    const opcoesSelecionadas = [];
+
+    for (const grupo of produto.gruposOpcao) {
+      const opcoesDoGrupo = new Map(grupo.opcoes.map((o) => [o.id, o]));
+      const selecionadasDoGrupo = opcaoIdsSelecionados
+        .map((id) => opcoesDoGrupo.get(id))
+        .filter((o) => o && o.ativo);
+
+      const minEfetivo = grupo.obrigatorio ? Math.max(1, grupo.minSelecoes) : grupo.minSelecoes;
+      if (selecionadasDoGrupo.length < minEfetivo) {
+        return res.status(400).json({
+          error: `Selecione ao menos ${minEfetivo} opção(ões) em "${grupo.nome}" para o produto "${produto.nome}"`,
+        });
+      }
+      const maxEfetivo = !grupo.selecaoMultipla ? 1 : (grupo.maxSelecoes ?? Infinity);
+      if (selecionadasDoGrupo.length > maxEfetivo) {
+        return res.status(400).json({
+          error: `Selecione no máximo ${maxEfetivo} opção(ões) em "${grupo.nome}" para o produto "${produto.nome}"`,
+        });
+      }
+
+      for (const opcao of selecionadasDoGrupo) {
+        opcoesSelecionadas.push({
+          opcaoId: opcao.id,
+          nomeGrupo: grupo.nome,
+          nomeOpcao: opcao.nome,
+          precoAdicional: opcao.precoAdicional,
+        });
+      }
+    }
+
+    const precoBase = Number(produto.precoPromocional ?? produto.preco);
+    const precoAdicionais = opcoesSelecionadas.reduce((sum, o) => sum + Number(o.precoAdicional), 0);
+    const precoUnitario = precoBase + precoAdicionais;
+
     itensParaCriar.push({
       produtoId: produto.id,
       nomeProduto: produto.nome,
+      ehCombo: produto.ehCombo,
       precoUnitario,
       quantidade,
       observacoes: item.observacoes || null,
+      ...(opcoesSelecionadas.length > 0 ? { opcoesSelecionadas: { create: opcoesSelecionadas } } : {}),
     });
   }
 
@@ -267,9 +307,11 @@ router.post('/', asyncHandler(async (req, res) => {
       return res.status(400).json({ error: 'Cliente informado não pertence a esta empresa' });
     }
     if (usarItemGratis) {
-      const disponiveis = cliente.itensGratisGanhos - cliente.itensGratisResgatados;
+      const { disponiveis, expirado } = disponibilidadeFidelidade(cliente, req.empresa);
       if (disponiveis <= 0) {
-        return res.status(400).json({ error: 'Nenhum item grátis disponível para resgate' });
+        return res.status(400).json({
+          error: expirado ? 'O prazo para resgatar o item grátis expirou' : 'Nenhum item grátis disponível para resgate',
+        });
       }
       const menorPreco = Math.min(...itensParaCriar.map((i) => Number(i.precoUnitario)));
       subtotal = Math.max(0, subtotal - menorPreco);
@@ -328,7 +370,7 @@ router.post('/', asyncHandler(async (req, res) => {
         descontoCupom,
         itens: { create: itensParaCriar },
       },
-      include: { itens: true, motoboy: { select: { id: true, nome: true, latitudeAtual: true, longitudeAtual: true, localizacaoAtualizadaEm: true } } },
+      include: { itens: { include: { opcoesSelecionadas: true } }, motoboy: { select: { id: true, nome: true, latitudeAtual: true, longitudeAtual: true, localizacaoAtualizadaEm: true } } },
     });
 
     if (resgatouItemGratis) {
@@ -421,7 +463,7 @@ router.patch('/:id/status', asyncHandler(async (req, res) => {
         status,
         ...(carimboCampo ? { [carimboCampo]: new Date() } : {}),
       },
-      include: { itens: true, motoboy: { select: { id: true, nome: true, latitudeAtual: true, longitudeAtual: true, localizacaoAtualizadaEm: true } } },
+      include: { itens: { include: { opcoesSelecionadas: true } }, motoboy: { select: { id: true, nome: true, latitudeAtual: true, longitudeAtual: true, localizacaoAtualizadaEm: true } } },
     });
 
     // Ao confirmar a entrega, registra a venda como entrada no caixa unificado.
@@ -439,13 +481,19 @@ router.patch('/:id/status', asyncHandler(async (req, res) => {
       // Credita fidelidade (1x por pedido, guardado por unidadesFidelidadeCreditadas).
       if (salvo.clienteId && salvo.unidadesFidelidadeCreditadas == null) {
         const unidades = salvo.itens.reduce((sum, item) => sum + item.quantidade, 0);
+        const clienteAntes = await tx.cliente.findUnique({ where: { id: salvo.clienteId } });
         const cliente = await tx.cliente.update({
           where: { id: salvo.clienteId },
           data: { totalUnidadesCompradas: { increment: unidades } },
         });
+        const novosGanhos = Math.floor(cliente.totalUnidadesCompradas / 10);
+        const ganhouNovoItem = novosGanhos > (clienteAntes?.itensGratisGanhos ?? 0);
         await tx.cliente.update({
           where: { id: salvo.clienteId },
-          data: { itensGratisGanhos: Math.floor(cliente.totalUnidadesCompradas / 10) },
+          data: {
+            itensGratisGanhos: novosGanhos,
+            ...(ganhouNovoItem ? { itemGratisGanhoEm: new Date() } : {}),
+          },
         });
         await tx.pedido.update({
           where: { id: salvo.id },
@@ -507,7 +555,7 @@ router.patch('/:id/motoboy', asyncHandler(async (req, res) => {
     const pedidoAtualizado = await prisma.pedido.update({
       where: { id: pedido.id },
       data: { motoboyId: null, taxaEntregaMotoboy: null },
-      include: { itens: true, motoboy: { select: { id: true, nome: true, latitudeAtual: true, longitudeAtual: true, localizacaoAtualizadaEm: true } } },
+      include: { itens: { include: { opcoesSelecionadas: true } }, motoboy: { select: { id: true, nome: true, latitudeAtual: true, longitudeAtual: true, localizacaoAtualizadaEm: true } } },
     });
     return res.json(pedidoAtualizado);
   }
@@ -522,7 +570,7 @@ router.patch('/:id/motoboy', asyncHandler(async (req, res) => {
   const pedidoAtualizado = await prisma.pedido.update({
     where: { id: pedido.id },
     data: { motoboyId: motoboy.id, taxaEntregaMotoboy: motoboy.taxaPadrao },
-    include: { itens: true, motoboy: { select: { id: true, nome: true, latitudeAtual: true, longitudeAtual: true, localizacaoAtualizadaEm: true } } },
+    include: { itens: { include: { opcoesSelecionadas: true } }, motoboy: { select: { id: true, nome: true, latitudeAtual: true, longitudeAtual: true, localizacaoAtualizadaEm: true } } },
   });
 
   res.json(pedidoAtualizado);
@@ -673,7 +721,7 @@ router.post('/:id/avaliar-pedido', asyncHandler(async (req, res) => {
   const atualizado = await prisma.pedido.update({
     where: { id: pedido.id },
     data: { notaPedido: nota, comentarioPedido: comentario || null, avaliadoEm: new Date() },
-    include: { itens: true, motoboy: { select: { id: true, nome: true, latitudeAtual: true, longitudeAtual: true, localizacaoAtualizadaEm: true } } },
+    include: { itens: { include: { opcoesSelecionadas: true } }, motoboy: { select: { id: true, nome: true, latitudeAtual: true, longitudeAtual: true, localizacaoAtualizadaEm: true } } },
   });
 
   res.json(atualizado);
@@ -744,7 +792,7 @@ router.post('/:id/avaliar-motoboy', asyncHandler(async (req, res) => {
   const atualizado = await prisma.pedido.update({
     where: { id: pedido.id },
     data: { notaMotoboy: nota, comentarioMotoboy: comentario || null, motoboyAvaliadoEm: new Date() },
-    include: { itens: true, motoboy: { select: { id: true, nome: true, latitudeAtual: true, longitudeAtual: true, localizacaoAtualizadaEm: true } } },
+    include: { itens: { include: { opcoesSelecionadas: true } }, motoboy: { select: { id: true, nome: true, latitudeAtual: true, longitudeAtual: true, localizacaoAtualizadaEm: true } } },
   });
 
   res.json(atualizado);

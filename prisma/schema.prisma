@@ -49,9 +49,22 @@ model Empresa {
 
   /// Percentual (5 a 20) sobre o total vendido destinado ao dono da plataforma, definido pelo Super Admin.
   comissaoPercent Decimal @default(10.00) @map("comissao_percent") @db.Decimal(5, 2)
+  /// Se true, o card "Comissão da plataforma" fica oculto no CRM do próprio tenant. Controlado só pelo Super Admin.
+  ocultarComissaoTenant Boolean @default(false) @map("ocultar_comissao_tenant")
 
   /// Texto livre (institucional) — se vazio, o front usa um modelo padrão de LGPD com os dados da empresa.
   termosConteudo String? @map("termos_conteudo")
+
+  /// Link oficial de avaliação do Google Meu Negócio (Perfil da Empresa no Google > Compartilhar perfil > link de avaliação).
+  /// Não existe API pública do Google para publicar avaliações/fotos em nome do cliente — o link abre a própria página
+  /// do Google, onde o cliente escreve a mensagem e anexa fotos pela interface oficial.
+  googleBusinessReviewUrl String? @map("google_business_review_url")
+
+  // Programa de fidelidade (CMS)
+  fidelidadeLogoUrl      String? @map("fidelidade_logo_url") // se vazio, usa o logoUrl da loja
+  fidelidadeValidadeDias Int?    @map("fidelidade_validade_dias") // prazo p/ resgatar o item grátis após ganhar; null = sem prazo
+  fidelidadeAvisoFaltam  Int?    @map("fidelidade_aviso_faltam") // dispara aviso na loja quando faltar X unidades p/ o prêmio
+  fidelidadeNomeItem     String? @map("fidelidade_nome_item") // nome genérico usado nas mensagens, ex: "lanches"
 
   // Configurações operacionais
   lojaAbertaManual      Boolean @default(true) @map("loja_aberta_manual") // botão de emergência "Loja Aberta/Fechada"
@@ -77,6 +90,7 @@ model Empresa {
   horarios          HorarioFuncionamento[]
   zonasEntrega      ZonaEntrega[]
   faturas           Fatura[]
+  categorias        Categoria[]
 
   planoId String? @map("plano_id") @db.Uuid
   plano   Plano?  @relation(fields: [planoId], references: [id], onDelete: SetNull)
@@ -93,8 +107,21 @@ model Plano {
   descricao       String?
   ativo           Boolean  @default(true)
   ordem           Int      @default(0)
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  /// Lista de recursos exibidos na página do plano (ex: "Gestão de pedidos", "Dashboard", ...).
+  recursos String[] @default([])
+
+  /// Limites do plano; null = ilimitado (dentro da política de uso justo da plataforma).
+  limitePedidosMes   Int? @map("limite_pedidos_mes")
+  limiteProdutos     Int? @map("limite_produtos")
+  limiteUsuarios     Int? @map("limite_usuarios")
+  limiteEntregadores Int? @map("limite_entregadores")
+
+  /// Marca o plano com o selo "Mais Popular" na listagem.
+  destaque Boolean @default(false)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   empresas Empresa[]
 
@@ -215,9 +242,11 @@ model Cliente {
   senhaHash              String   @map("senha_hash")
 
   // Fidelidade: a cada 10 unidades de itens compradas (em pedidos ENTREGUES), 1 item grátis é liberado.
-  totalUnidadesCompradas Int @default(0) @map("total_unidades_compradas")
-  itensGratisGanhos      Int @default(0) @map("itens_gratis_ganhos")
-  itensGratisResgatados  Int @default(0) @map("itens_gratis_resgatados")
+  totalUnidadesCompradas Int       @default(0) @map("total_unidades_compradas")
+  itensGratisGanhos      Int       @default(0) @map("itens_gratis_ganhos")
+  itensGratisResgatados  Int       @default(0) @map("itens_gratis_resgatados")
+  /// Quando o item grátis mais recente foi liberado — usado para calcular o prazo de validade (Empresa.fidelidadeValidadeDias).
+  itemGratisGanhoEm      DateTime? @map("item_gratis_ganho_em")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -300,18 +329,38 @@ model Cupom {
   @@map("cupons")
 }
 
+/// Categoria de produtos de uma loja (ex: "Acarajés", "Combos"), gerenciada pelo admin do tenant.
+/// Controla também a ordem/abas de navegação exibidas para o cliente na loja pública.
+model Categoria {
+  id        String   @id @default(uuid()) @db.Uuid
+  empresaId String   @map("empresa_id") @db.Uuid
+  empresa   Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  nome      String
+  ordem     Int      @default(0)
+  ativo     Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  produtos Produto[]
+
+  @@map("categorias")
+}
+
 model Produto {
-  id               String   @id @default(uuid()) @db.Uuid
-  empresaId        String   @map("empresa_id") @db.Uuid
-  empresa          Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  id               String     @id @default(uuid()) @db.Uuid
+  empresaId        String     @map("empresa_id") @db.Uuid
+  empresa          Empresa    @relation(fields: [empresaId], references: [id], onDelete: Cascade)
   nome             String
   descricao        String?
-  categoria        String?
+  categoriaId      String?    @map("categoria_id") @db.Uuid
+  categoria        Categoria? @relation(fields: [categoriaId], references: [id], onDelete: SetNull)
   preco            Decimal  @db.Decimal(10, 2)
   precoPromocional Decimal? @map("preco_promocional") @db.Decimal(10, 2)
   fotoUrl          String?  @map("foto_url")
   ativo            Boolean  @default(true)
   ordem            Int      @default(0)
+  /// Marca o produto como combo (composto por vários itens) — exibido como selo nos pedidos.
+  ehCombo          Boolean  @default(false) @map("eh_combo")
 
   // Estoque & insumos
   esgotadoHoje     Boolean  @default(false) @map("esgotado_hoje") // pausa rápida sem desativar/excluir o produto
@@ -323,8 +372,54 @@ model Produto {
 
   itensPedido PedidoItem[]
   variacoes   ProdutoVariacao[]
+  gruposOpcao ProdutoGrupoOpcao[]
 
   @@map("produtos")
+}
+
+/// Grupo de opções/complementos de um produto (ex: "Monte seu acarajé", "Adicionais").
+/// Definido pelo admin de cada loja, por produto — cada tenant configura o seu.
+model ProdutoGrupoOpcao {
+  id              String   @id @default(uuid()) @db.Uuid
+  produtoId       String   @map("produto_id") @db.Uuid
+  produto         Produto  @relation(fields: [produtoId], references: [id], onDelete: Cascade)
+  nome            String
+  /// Se true, o cliente precisa selecionar ao menos minSelecoes itens deste grupo para adicionar ao carrinho.
+  obrigatorio     Boolean  @default(false)
+  /// true = caixas de seleção (pode marcar vários); false = seleção única (rádio).
+  selecaoMultipla Boolean  @default(true) @map("selecao_multipla")
+  minSelecoes     Int      @default(0) @map("min_selecoes")
+  maxSelecoes     Int?     @map("max_selecoes")
+  ordem           Int      @default(0)
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  opcoes ProdutoOpcao[]
+
+  @@map("produto_grupos_opcao")
+}
+
+/// Item selecionável dentro de um grupo de opções (ex: "Camarão", "Pimenta", "Carne extra").
+/// precoAdicional = 0 significa incluso sem custo extra; > 0 é cobrado a mais por unidade do produto.
+model ProdutoOpcao {
+  id             String            @id @default(uuid()) @db.Uuid
+  grupoId        String            @map("grupo_id") @db.Uuid
+  grupo          ProdutoGrupoOpcao @relation(fields: [grupoId], references: [id], onDelete: Cascade)
+  nome           String
+  precoAdicional Decimal           @default(0) @map("preco_adicional") @db.Decimal(10, 2)
+  /// Se true, a opção já vem marcada/inclusa por padrão no modal do cliente (ele desmarca o que não quiser).
+  selecionadoPorPadrao Boolean     @default(false) @map("selecionado_por_padrao")
+  /// Foto e subtítulo opcionais, usados quando o grupo é exibido como cartões (ex: "No Saquinho" x "No Prato").
+  fotoUrl        String?           @map("foto_url")
+  descricao      String?
+  ativo          Boolean           @default(true)
+  ordem          Int               @default(0)
+  createdAt      DateTime          @default(now()) @map("created_at")
+  updatedAt      DateTime          @updatedAt @map("updated_at")
+
+  itensPedido PedidoItemOpcao[]
+
+  @@map("produto_opcoes")
 }
 
 /// Variação/sabor de um produto com estoque próprio (ex: "Camarão", "Frango"). Gerenciado no admin;
@@ -447,12 +542,31 @@ model PedidoItem {
   produtoId     String?  @map("produto_id") @db.Uuid
   produto       Produto? @relation(fields: [produtoId], references: [id], onDelete: SetNull)
   nomeProduto   String   @map("nome_produto")
+  /// Snapshot de Produto.ehCombo no momento da compra (mesmo padrão de nomeProduto/precoUnitario).
+  ehCombo       Boolean  @default(false) @map("eh_combo")
   precoUnitario Decimal  @map("preco_unitario") @db.Decimal(10, 2)
   quantidade    Int
   observacoes   String?
   createdAt     DateTime @default(now()) @map("created_at")
 
+  opcoesSelecionadas PedidoItemOpcao[]
+
   @@map("pedido_itens")
+}
+
+/// Snapshot das opções/complementos escolhidos pelo cliente para um item do pedido — preserva o que
+/// foi escolhido mesmo que o produto/opção seja alterado ou removido depois.
+model PedidoItemOpcao {
+  id             String        @id @default(uuid()) @db.Uuid
+  pedidoItemId   String        @map("pedido_item_id") @db.Uuid
+  pedidoItem     PedidoItem    @relation(fields: [pedidoItemId], references: [id], onDelete: Cascade)
+  opcaoId        String?       @map("opcao_id") @db.Uuid
+  opcao          ProdutoOpcao? @relation(fields: [opcaoId], references: [id], onDelete: SetNull)
+  nomeGrupo      String        @map("nome_grupo")
+  nomeOpcao      String        @map("nome_opcao")
+  precoAdicional Decimal       @map("preco_adicional") @db.Decimal(10, 2)
+
+  @@map("pedido_item_opcoes")
 }
 
 enum TipoMovimentoCaixa {

@@ -56,7 +56,10 @@ router.get('/', asyncHandler(async (req, res) => {
  *         description: Dados inválidos
  */
 router.post('/', asyncHandler(async (req, res) => {
-  const { nome, valorMensal, comissaoPercent, descricao, ativo, ordem } = req.body;
+  const {
+    nome, valorMensal, comissaoPercent, descricao, ativo, ordem, recursos,
+    limitePedidosMes, limiteProdutos, limiteUsuarios, limiteEntregadores, destaque,
+  } = req.body;
 
   const erros = validarPayload(req.body);
   if (erros.length) {
@@ -69,6 +72,12 @@ router.post('/', asyncHandler(async (req, res) => {
       valorMensal: valorMensal ?? 0,
       comissaoPercent,
       descricao: descricao || null,
+      recursos: Array.isArray(recursos) ? recursos : [],
+      limitePedidosMes: limitePedidosMes || null,
+      limiteProdutos: limiteProdutos || null,
+      limiteUsuarios: limiteUsuarios || null,
+      limiteEntregadores: limiteEntregadores || null,
+      ...(destaque !== undefined ? { destaque } : {}),
       ...(ativo !== undefined ? { ativo } : {}),
       ...(ordem !== undefined ? { ordem } : {}),
     },
@@ -91,7 +100,10 @@ router.post('/', asyncHandler(async (req, res) => {
  *         description: Plano não encontrado
  */
 router.put('/:id', asyncHandler(async (req, res) => {
-  const { nome, valorMensal, comissaoPercent, descricao, ativo, ordem } = req.body;
+  const {
+    nome, valorMensal, comissaoPercent, descricao, ativo, ordem, recursos,
+    limitePedidosMes, limiteProdutos, limiteUsuarios, limiteEntregadores, destaque,
+  } = req.body;
 
   const erros = validarPayload(req.body);
   if (erros.length) {
@@ -106,6 +118,12 @@ router.put('/:id', asyncHandler(async (req, res) => {
         valorMensal: valorMensal ?? 0,
         comissaoPercent,
         descricao: descricao || null,
+        recursos: Array.isArray(recursos) ? recursos : [],
+        limitePedidosMes: limitePedidosMes || null,
+        limiteProdutos: limiteProdutos || null,
+        limiteUsuarios: limiteUsuarios || null,
+        limiteEntregadores: limiteEntregadores || null,
+        ...(destaque !== undefined ? { destaque } : {}),
         ...(ativo !== undefined ? { ativo } : {}),
         ...(ordem !== undefined ? { ordem } : {}),
       },
