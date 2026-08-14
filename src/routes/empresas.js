@@ -755,6 +755,67 @@ router.post('/:id/admin-login', asyncHandler(async (req, res) => {
 
 /**
  * @openapi
+ * /empresas/admin-login:
+ *   post:
+ *     summary: Login do administrador sem informar a loja previamente — identifica a empresa pelo próprio usuário (usado pelo app mobile)
+ *     tags: [Empresas]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [usuario, senha]
+ *             properties:
+ *               usuario: { type: string }
+ *               senha: { type: string }
+ *     responses:
+ *       200:
+ *         description: Login válido — retorna a sessão do admin já com os dados da loja vinculada (incluindo slug)
+ *       401:
+ *         description: Usuário ou senha inválidos, ou acesso desativado
+ */
+router.post('/admin-login', asyncHandler(async (req, res) => {
+  const { usuario, senha } = req.body;
+  if (!usuario || !senha) {
+    return res.status(400).json({ error: 'Campos "usuario" e "senha" são obrigatórios' });
+  }
+
+  const empresa = await prisma.empresa.findUnique({ where: { usuario } });
+  if (!empresa) {
+    return res.status(401).json({ error: 'Usuário ou senha inválidos' });
+  }
+
+  if (!empresa.empresaAtiva || !empresa.adminAtivo) {
+    await registrarLog({
+      tipo: 'ACESSO', empresaId: empresa.id, empresaNome: empresa.nome, ator: usuario,
+      acao: 'Tentativa de login no admin com acesso desativado',
+    });
+    return res.status(401).json({ error: 'Acesso desativado. Fale com o suporte da plataforma.' });
+  }
+
+  const senhaValida = await bcrypt.compare(senha, empresa.senhaHash);
+  if (!senhaValida) {
+    await registrarLog({
+      tipo: 'ACESSO', empresaId: empresa.id, empresaNome: empresa.nome, ator: usuario, acao: 'Login no admin falhou (senha incorreta)',
+    });
+    return res.status(401).json({ error: 'Usuário ou senha inválidos' });
+  }
+
+  await registrarLog({ tipo: 'ACESSO', empresaId: empresa.id, empresaNome: empresa.nome, ator: usuario, acao: 'Login no admin da loja (app)' });
+  res.json({
+    id: empresa.id,
+    nome: empresa.nome,
+    usuario: empresa.usuario,
+    slug: empresa.slug,
+    corPrimaria: empresa.corPrimaria,
+    corSecundaria: empresa.corSecundaria,
+    logoUrl: empresa.logoUrl,
+  });
+}));
+
+/**
+ * @openapi
  * /empresas/{id}/comissao:
  *   patch:
  *     summary: Define o percentual de comissão da plataforma sobre as vendas desta empresa (5 a 20%)
