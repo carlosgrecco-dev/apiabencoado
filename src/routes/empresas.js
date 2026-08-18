@@ -286,6 +286,54 @@ router.get('/', requireSuperAdmin, asyncHandler(async (req, res) => {
  *       404:
  *         description: Empresa não encontrada
  */
+/**
+ * @openapi
+ * /empresas/slug/{slug}/manifest.json:
+ *   get:
+ *     summary: Manifest do PWA desta loja, numa URL estável — usado pelo prompt de instalação do navegador
+ *     tags: [Empresas]
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Manifest da loja
+ *       404:
+ *         description: Empresa não encontrada
+ */
+router.get('/slug/:slug/manifest.json', asyncHandler(async (req, res) => {
+  const empresa = await prisma.empresa.findUnique({
+    where: { slug: req.params.slug.toLowerCase() },
+    select: { nome: true, descricao: true, corPrimaria: true, logoUrl: true },
+  });
+
+  if (!empresa) {
+    return res.status(404).json({ error: 'Empresa não encontrada' });
+  }
+
+  const frontOrigin = process.env.FRONT_ORIGIN || 'https://saltfood.com.br';
+  const slug = req.params.slug.toLowerCase();
+  const iconUrl = empresa.logoUrl || `${frontOrigin}/saltfood-icon.png`;
+
+  res.set('Content-Type', 'application/manifest+json');
+  res.json({
+    name: empresa.nome,
+    short_name: empresa.nome,
+    description: empresa.descricao || `Peça online na ${empresa.nome}, com entrega rápida.`,
+    start_url: `${frontOrigin}/${slug}`,
+    scope: `${frontOrigin}/${slug}`,
+    display: 'standalone',
+    background_color: '#ffffff',
+    theme_color: empresa.corPrimaria,
+    icons: [
+      { src: iconUrl, sizes: '192x192', type: 'image/png', purpose: 'any' },
+      { src: iconUrl, sizes: '512x512', type: 'image/png', purpose: 'any' },
+    ],
+  });
+}));
+
 router.get('/slug/:slug', asyncHandler(async (req, res) => {
   const empresa = await prisma.empresa.findUnique({
     where: { slug: req.params.slug.toLowerCase() },
