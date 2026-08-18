@@ -4,7 +4,7 @@ const loadEmpresa = require('../lib/loadEmpresa');
 const validarCupom = require('../lib/validarCupom');
 const { calcularStatusLoja } = require('../lib/statusLoja');
 const { calcularFrete } = require('../lib/calcularFrete');
-const { disponibilidadeFidelidade } = require('../lib/fidelidade');
+const { disponibilidadeFidelidade, creditarUnidadesFidelidade } = require('../lib/fidelidade');
 
 const router = Router({ mergeParams: true });
 
@@ -481,20 +481,7 @@ router.patch('/:id/status', asyncHandler(async (req, res) => {
       // Credita fidelidade (1x por pedido, guardado por unidadesFidelidadeCreditadas).
       if (salvo.clienteId && salvo.unidadesFidelidadeCreditadas == null) {
         const unidades = salvo.itens.reduce((sum, item) => sum + item.quantidade, 0);
-        const clienteAntes = await tx.cliente.findUnique({ where: { id: salvo.clienteId } });
-        const cliente = await tx.cliente.update({
-          where: { id: salvo.clienteId },
-          data: { totalUnidadesCompradas: { increment: unidades } },
-        });
-        const novosGanhos = Math.floor(cliente.totalUnidadesCompradas / 10);
-        const ganhouNovoItem = novosGanhos > (clienteAntes?.itensGratisGanhos ?? 0);
-        await tx.cliente.update({
-          where: { id: salvo.clienteId },
-          data: {
-            itensGratisGanhos: novosGanhos,
-            ...(ganhouNovoItem ? { itemGratisGanhoEm: new Date() } : {}),
-          },
-        });
+        await creditarUnidadesFidelidade(tx, salvo.clienteId, unidades);
         await tx.pedido.update({
           where: { id: salvo.id },
           data: { unidadesFidelidadeCreditadas: unidades },
@@ -574,6 +561,81 @@ router.patch('/:id/motoboy', asyncHandler(async (req, res) => {
   });
 
   res.json(pedidoAtualizado);
+}));
+
+/**
+ * @openapi
+ * /empresas/{empresaId}/pedidos/{id}/liberar-resgate:
+ *   post:
+ *     summary: Aplica o item grátis da fidelidade a um pedido já criado, quando o cliente pede depois (WhatsApp, telefone etc.)
+ *     tags: [Pedidos]
+ *     parameters:
+ *       - in: path
+ *         name: empresaId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Resgate aplicado, pedido atualizado com o desconto
+ *       400:
+ *         description: Pedido sem cliente vinculado, já resgatado, finalizado, ou sem item grátis disponível
+ *       404:
+ *         description: Pedido não encontrado
+ */
+router.post('/:id/liberar-resgate', asyncHandler(async (req, res) => {
+  const pedido = await prisma.pedido.findFirst({
+    where: { id: req.params.id, empresaId: req.params.empresaId },
+    include: { itens: true },
+  });
+  if (!pedido) {
+    return res.status(404).json({ error: 'Pedido não encontrado' });
+  }
+  if (!pedido.clienteId) {
+    return res.status(400).json({ error: 'Este pedido não está vinculado a uma conta de cliente' });
+  }
+  if (pedido.itemGratisResgatado) {
+    return res.status(400).json({ error: 'Este pedido já usou o item grátis da fidelidade' });
+  }
+  if (pedido.status === 'ENTREGUE' || pedido.status === 'CANCELADO') {
+    return res.status(400).json({ error: 'Não é possível liberar o resgate em um pedido já finalizado' });
+  }
+
+  const cliente = await prisma.cliente.findFirst({ where: { id: pedido.clienteId, empresaId: req.params.empresaId } });
+  if (!cliente) {
+    return res.status(404).json({ error: 'Cliente do pedido não encontrado' });
+  }
+
+  const { disponiveis, expirado } = disponibilidadeFidelidade(cliente, req.empresa);
+  if (disponiveis <= 0) {
+    return res.status(400).json({
+      error: expirado ? 'O prazo para resgatar o item grátis deste cliente já expirou' : 'Este cliente não tem itens grátis disponíveis para resgate',
+    });
+  }
+
+  const menorPreco = Math.min(...pedido.itens.map((i) => Number(i.precoUnitario)));
+  const novoSubtotal = Math.max(0, Number(pedido.subtotal) - menorPreco);
+  const novoTotal = Math.max(0, Number(pedido.total) - menorPreco);
+
+  const atualizado = await prisma.$transaction(async (tx) => {
+    const salvo = await tx.pedido.update({
+      where: { id: pedido.id },
+      data: { subtotal: novoSubtotal, total: novoTotal, itemGratisResgatado: true },
+      include: { itens: { include: { opcoesSelecionadas: true } }, motoboy: { select: { id: true, nome: true, latitudeAtual: true, longitudeAtual: true, localizacaoAtualizadaEm: true } } },
+    });
+
+    await tx.cliente.update({
+      where: { id: cliente.id },
+      data: { itensGratisResgatados: { increment: 1 } },
+    });
+
+    return salvo;
+  });
+
+  res.json(atualizado);
 }));
 
 /**

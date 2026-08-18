@@ -23,4 +23,31 @@ const disponibilidadeFidelidade = (cliente, empresa) => {
   return { disponiveis: expirado ? 0 : disponiveis, expiraEm, expirado };
 };
 
-module.exports = { disponibilidadeFidelidade };
+/**
+ * Credita `unidades` no contador de fidelidade do cliente e recalcula quantos itens grátis ele já
+ * ganhou no total (1 a cada LOYALTY_STAMPS_GOAL unidades). Usado tanto ao marcar um pedido como
+ * ENTREGUE quanto quando o admin credita unidades manualmente (compra/retirada por telefone ou balcão).
+ * @param {import('@prisma/client').Prisma.TransactionClient} tx
+ * @param {string} clienteId
+ * @param {number} unidades
+ */
+const creditarUnidadesFidelidade = async (tx, clienteId, unidades) => {
+  const clienteAntes = await tx.cliente.findUnique({ where: { id: clienteId } });
+  const comNovoTotal = await tx.cliente.update({
+    where: { id: clienteId },
+    data: { totalUnidadesCompradas: { increment: unidades } },
+  });
+
+  const novosGanhos = Math.floor(comNovoTotal.totalUnidadesCompradas / 10);
+  const ganhouNovoItem = novosGanhos > (clienteAntes?.itensGratisGanhos ?? 0);
+
+  return tx.cliente.update({
+    where: { id: clienteId },
+    data: {
+      itensGratisGanhos: novosGanhos,
+      ...(ganhouNovoItem ? { itemGratisGanhoEm: new Date() } : {}),
+    },
+  });
+};
+
+module.exports = { disponibilidadeFidelidade, creditarUnidadesFidelidade };
