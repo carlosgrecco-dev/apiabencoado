@@ -10,7 +10,22 @@ const asyncHandler = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 const TIPOS_VALIDOS = ['ENTRADA', 'SAIDA', 'FECHAMENTO'];
 
 router.use(loadEmpresa);
-router.use(requireEmpresaAdmin());
+
+// GET / é usado tanto pelo admin (caixa completo, qualquer filtro) quanto pelo dashboard do
+// motoboy (só os próprios pagamentos) — mesmo padrão do GET /pedidos. Os outros métodos
+// (detalhe por id, criar, excluir) continuam exclusivos do admin.
+const requireLeituraCaixa = (req, res, next) => {
+  if (!req.auth || !['EMPRESA_ADMIN', 'MOTOBOY'].includes(req.auth.role)) {
+    return res.status(401).json({ error: 'Não autenticado' });
+  }
+  if (req.auth.empresaId !== req.params.empresaId) {
+    return res.status(403).json({ error: 'Acesso negado' });
+  }
+  if (req.empresa && !req.empresa.empresaAtiva) {
+    return res.status(403).json({ error: 'Acesso desativado. Fale com o suporte da plataforma.' });
+  }
+  next();
+};
 
 /**
  * @openapi
@@ -64,8 +79,9 @@ router.use(requireEmpresaAdmin());
  *       200:
  *         description: Lista de movimentos
  */
-router.get('/', asyncHandler(async (req, res) => {
-  const { tipo, motoboyId, de, ate } = req.query;
+router.get('/', requireLeituraCaixa, asyncHandler(async (req, res) => {
+  const { tipo, de, ate } = req.query;
+  const motoboyId = req.auth.role === 'MOTOBOY' ? req.auth.motoboyId : req.query.motoboyId;
 
   if (tipo && !TIPOS_VALIDOS.includes(tipo)) {
     return res.status(400).json({ error: `Campo "tipo" deve ser um de: ${TIPOS_VALIDOS.join(', ')}` });
@@ -114,7 +130,7 @@ router.get('/', asyncHandler(async (req, res) => {
  *       404:
  *         description: Movimento não encontrado
  */
-router.get('/:id', asyncHandler(async (req, res) => {
+router.get('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
   const movimento = await prisma.movimentoCaixa.findFirst({
     where: { id: req.params.id, empresaId: req.params.empresaId },
   });
@@ -149,7 +165,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
  *       400:
  *         description: Dados inválidos
  */
-router.post('/', asyncHandler(async (req, res) => {
+router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
   const { tipo, descricao, valor, motoboyId, dataMovimento } = req.body;
 
   if (!tipo || !TIPOS_VALIDOS.includes(tipo)) {
@@ -203,7 +219,7 @@ router.post('/', asyncHandler(async (req, res) => {
  *       404:
  *         description: Movimento não encontrado
  */
-router.delete('/:id', asyncHandler(async (req, res) => {
+router.delete('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
   const existente = await prisma.movimentoCaixa.findFirst({
     where: { id: req.params.id, empresaId: req.params.empresaId },
   });

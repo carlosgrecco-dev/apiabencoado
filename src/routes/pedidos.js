@@ -456,10 +456,29 @@ router.post('/', asyncHandler(async (req, res) => {
  *       404:
  *         description: Pedido não encontrado
  */
-router.patch('/:id/status', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+// Admin muda pra qualquer status válido; motoboy só pode confirmar a própria entrega (ENTREGUE),
+// e só do pedido que está atribuído a ele — nada além disso.
+router.patch('/:id/status', asyncHandler(async (req, res, next) => {
+  if (!req.auth || !['EMPRESA_ADMIN', 'MOTOBOY'].includes(req.auth.role)) {
+    return res.status(401).json({ error: 'Não autenticado' });
+  }
+  if (req.auth.empresaId !== req.params.empresaId) {
+    return res.status(403).json({ error: 'Acesso negado' });
+  }
+  if (req.empresa && !req.empresa.empresaAtiva) {
+    return res.status(403).json({ error: 'Acesso desativado. Fale com o suporte da plataforma.' });
+  }
+  if (req.auth.role === 'EMPRESA_ADMIN' && req.empresa && !req.empresa.adminAtivo) {
+    return res.status(403).json({ error: 'Acesso desativado. Fale com o suporte da plataforma.' });
+  }
+  next();
+}), asyncHandler(async (req, res) => {
   const { status } = req.body;
   if (!status || !STATUS_VALIDOS.includes(status)) {
     return res.status(400).json({ error: `Campo "status" é obrigatório e deve ser um de: ${STATUS_VALIDOS.join(', ')}` });
+  }
+  if (req.auth.role === 'MOTOBOY' && status !== 'ENTREGUE') {
+    return res.status(403).json({ error: 'Motoboys só podem confirmar a entrega de um pedido' });
   }
 
   const pedido = await prisma.pedido.findFirst({
@@ -467,6 +486,10 @@ router.patch('/:id/status', requireEmpresaAdmin(), asyncHandler(async (req, res)
   });
   if (!pedido) {
     return res.status(404).json({ error: 'Pedido não encontrado' });
+  }
+
+  if (req.auth.role === 'MOTOBOY' && pedido.motoboyId !== req.auth.motoboyId) {
+    return res.status(403).json({ error: 'Este pedido não está atribuído a você' });
   }
 
   if (!PROXIMOS_STATUS_VALIDOS[pedido.status].includes(status)) {
