@@ -97,8 +97,14 @@ const PROXIMOS_STATUS_VALIDOS = {
 router.get('/', asyncHandler(async (req, res) => {
   // Admin da loja pode filtrar por qualquer motoboyId; o portal do motoboy só pode ver os
   // próprios pedidos — o id vem do token, nunca da query, pra um motoboy não listar corridas de outro.
-  if (!req.auth || req.auth.empresaId !== req.params.empresaId || !['EMPRESA_ADMIN', 'MOTOBOY'].includes(req.auth.role)) {
+  if (!req.auth || !['EMPRESA_ADMIN', 'MOTOBOY'].includes(req.auth.role)) {
     return res.status(401).json({ error: 'Não autenticado' });
+  }
+  if (req.auth.empresaId !== req.params.empresaId) {
+    return res.status(403).json({ error: 'Acesso negado' });
+  }
+  if (req.empresa && !req.empresa.empresaAtiva) {
+    return res.status(403).json({ error: 'Acesso desativado. Fale com o suporte da plataforma.' });
   }
   const motoboyIdFiltro = req.auth.role === 'MOTOBOY' ? req.auth.motoboyId : req.query.motoboyId;
 

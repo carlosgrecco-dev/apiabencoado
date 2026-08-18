@@ -37,8 +37,11 @@ const authenticate = (req, res, next) => {
  * o token expirar.
  */
 const requireEmpresaAdmin = (paramName = 'empresaId') => (req, res, next) => {
-  if (!req.auth || req.auth.role !== 'EMPRESA_ADMIN' || req.auth.empresaId !== req.params[paramName]) {
+  if (!req.auth || req.auth.role !== 'EMPRESA_ADMIN') {
     return res.status(401).json({ error: 'Não autenticado' });
+  }
+  if (req.auth.empresaId !== req.params[paramName]) {
+    return res.status(403).json({ error: 'Acesso negado' });
   }
   if (req.empresa && (!req.empresa.empresaAtiva || !req.empresa.adminAtivo)) {
     return res.status(403).json({ error: 'Acesso desativado. Fale com o suporte da plataforma.' });
@@ -53,8 +56,11 @@ const requireEmpresaAdmin = (paramName = 'empresaId') => (req, res, next) => {
  * avaliar um pedido, onde o "dono" é o pedido, não um :id de cliente na URL).
  */
 const requireCliente = (paramName) => (req, res, next) => {
-  if (!req.auth || req.auth.role !== 'CLIENTE' || req.auth.empresaId !== req.params.empresaId) {
+  if (!req.auth || req.auth.role !== 'CLIENTE') {
     return res.status(401).json({ error: 'Não autenticado' });
+  }
+  if (req.auth.empresaId !== req.params.empresaId) {
+    return res.status(403).json({ error: 'Acesso negado' });
   }
   if (paramName && req.auth.clienteId !== req.params[paramName]) {
     return res.status(403).json({ error: 'Acesso negado' });
@@ -64,8 +70,11 @@ const requireCliente = (paramName) => (req, res, next) => {
 
 /** Mesma forma que requireCliente, para o motoboy (usado na rota de atualizar a própria localização). */
 const requireMotoboy = (paramName) => (req, res, next) => {
-  if (!req.auth || req.auth.role !== 'MOTOBOY' || req.auth.empresaId !== req.params.empresaId) {
+  if (!req.auth || req.auth.role !== 'MOTOBOY') {
     return res.status(401).json({ error: 'Não autenticado' });
+  }
+  if (req.auth.empresaId !== req.params.empresaId) {
+    return res.status(403).json({ error: 'Acesso negado' });
   }
   if (paramName && req.auth.motoboyId !== req.params[paramName]) {
     return res.status(403).json({ error: 'Acesso negado' });
