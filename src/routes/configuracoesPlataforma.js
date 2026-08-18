@@ -7,14 +7,33 @@ const router = Router();
 
 const asyncHandler = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
-router.use(requireSuperAdmin);
-
 /** Busca a linha única de configurações globais, criando-a com valores padrão se ainda não existir. */
 const getOuCriar = async () => {
   const existente = await prisma.configuracaoPlataforma.findFirst();
   if (existente) return existente;
   return prisma.configuracaoPlataforma.create({ data: {} });
 };
+
+/**
+ * @openapi
+ * /configuracoes-plataforma/publico:
+ *   get:
+ *     summary: Subconjunto público das configurações globais (contato de suporte) — usado na landing page da plataforma
+ *     tags: [ConfiguracoesPlataforma]
+ *     responses:
+ *       200:
+ *         description: Dados de contato públicos
+ */
+router.get('/publico', asyncHandler(async (req, res) => {
+  const config = await getOuCriar();
+  res.json({
+    nomeEmpresa: config.nomeEmpresa,
+    emailSuporte: config.emailSuporte,
+    telefoneSuporte: config.telefoneSuporte,
+  });
+}));
+
+router.use(requireSuperAdmin);
 
 /**
  * @openapi
