@@ -1,12 +1,14 @@
 const { Router } = require('express');
 const prisma = require('../lib/prisma');
 const loadEmpresa = require('../lib/loadEmpresa');
+const { requireEmpresaAdmin } = require('../lib/auth');
 
 const router = Router({ mergeParams: true });
 
 const asyncHandler = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 router.use(loadEmpresa);
+router.use(requireEmpresaAdmin());
 
 /** Garante que o produto pertence à empresa da rota antes de qualquer operação em suas variações. */
 const loadProduto = asyncHandler(async (req, res, next) => {

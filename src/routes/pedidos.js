@@ -5,6 +5,7 @@ const validarCupom = require('../lib/validarCupom');
 const { calcularStatusLoja } = require('../lib/statusLoja');
 const { calcularFrete } = require('../lib/calcularFrete');
 const { disponibilidadeFidelidade, creditarUnidadesFidelidade } = require('../lib/fidelidade');
+const { requireEmpresaAdmin, requireCliente } = require('../lib/auth');
 
 const router = Router({ mergeParams: true });
 
@@ -94,7 +95,14 @@ const PROXIMOS_STATUS_VALIDOS = {
  *         description: Lista de pedidos
  */
 router.get('/', asyncHandler(async (req, res) => {
-  const { status, motoboyId, motoboyPago, de, ate } = req.query;
+  // Admin da loja pode filtrar por qualquer motoboyId; o portal do motoboy só pode ver os
+  // próprios pedidos — o id vem do token, nunca da query, pra um motoboy não listar corridas de outro.
+  if (!req.auth || req.auth.empresaId !== req.params.empresaId || !['EMPRESA_ADMIN', 'MOTOBOY'].includes(req.auth.role)) {
+    return res.status(401).json({ error: 'Não autenticado' });
+  }
+  const motoboyIdFiltro = req.auth.role === 'MOTOBOY' ? req.auth.motoboyId : req.query.motoboyId;
+
+  const { status, motoboyPago, de, ate } = req.query;
 
   if (status && !STATUS_VALIDOS.includes(status)) {
     return res.status(400).json({ error: `Campo "status" deve ser um de: ${STATUS_VALIDOS.join(', ')}` });
@@ -103,7 +111,7 @@ router.get('/', asyncHandler(async (req, res) => {
   const where = {
     empresaId: req.params.empresaId,
     ...(status ? { status } : {}),
-    ...(motoboyId ? { motoboyId } : {}),
+    ...(motoboyIdFiltro ? { motoboyId: motoboyIdFiltro } : {}),
     ...(motoboyPago !== undefined ? { motoboyPago: motoboyPago === 'true' } : {}),
     ...(de || ate
       ? {
@@ -184,8 +192,15 @@ router.get('/:id', asyncHandler(async (req, res) => {
 router.post('/', asyncHandler(async (req, res) => {
   const {
     clienteNome, clienteTelefone, endereco, bairro, referencia,
-    formaPagamento, trocoPara, observacoes, itens, clienteId, usarItemGratis, cupomCodigo,
+    formaPagamento, trocoPara, observacoes, itens, usarItemGratis, cupomCodigo,
   } = req.body;
+
+  // Checkout aceita convidado (sem login) — clienteId nunca vem do corpo da requisição, só do
+  // token de quem estiver logado como CLIENTE desta empresa, pra ninguém resgatar fidelidade ou
+  // aplicar cupom de "primeira compra" em nome de outra pessoa.
+  const clienteId = (req.auth && req.auth.role === 'CLIENTE' && req.auth.empresaId === req.params.empresaId)
+    ? req.auth.clienteId
+    : null;
 
   const erros = [];
   if (!clienteNome) erros.push('Campo "clienteNome" é obrigatório');
@@ -435,7 +450,7 @@ router.post('/', asyncHandler(async (req, res) => {
  *       404:
  *         description: Pedido não encontrado
  */
-router.patch('/:id/status', asyncHandler(async (req, res) => {
+router.patch('/:id/status', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
   const { status } = req.body;
   if (!status || !STATUS_VALIDOS.includes(status)) {
     return res.status(400).json({ error: `Campo "status" é obrigatório e deve ser um de: ${STATUS_VALIDOS.join(', ')}` });
@@ -524,7 +539,7 @@ router.patch('/:id/status', asyncHandler(async (req, res) => {
  *       404:
  *         description: Pedido ou motoboy não encontrado
  */
-router.patch('/:id/motoboy', asyncHandler(async (req, res) => {
+router.patch('/:id/motoboy', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
   const { motoboyId } = req.body;
 
   const pedido = await prisma.pedido.findFirst({
@@ -586,7 +601,7 @@ router.patch('/:id/motoboy', asyncHandler(async (req, res) => {
  *       404:
  *         description: Pedido não encontrado
  */
-router.post('/:id/liberar-resgate', asyncHandler(async (req, res) => {
+router.post('/:id/liberar-resgate', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
   const pedido = await prisma.pedido.findFirst({
     where: { id: req.params.id, empresaId: req.params.empresaId },
     include: { itens: true },
@@ -666,7 +681,7 @@ router.post('/:id/liberar-resgate', asyncHandler(async (req, res) => {
  *       404:
  *         description: Motoboy não encontrado
  */
-router.post('/pagar-motoboy', asyncHandler(async (req, res) => {
+router.post('/pagar-motoboy', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
   const { motoboyId } = req.body;
   if (!motoboyId) {
     return res.status(400).json({ error: 'Campo "motoboyId" é obrigatório' });
@@ -757,8 +772,8 @@ router.post('/pagar-motoboy', asyncHandler(async (req, res) => {
  *       404:
  *         description: Pedido não encontrado
  */
-router.post('/:id/avaliar-pedido', asyncHandler(async (req, res) => {
-  const { clienteId, nota, comentario } = req.body;
+router.post('/:id/avaliar-pedido', requireCliente(), asyncHandler(async (req, res) => {
+  const { nota, comentario } = req.body;
 
   if (!Number.isInteger(nota) || nota < 1 || nota > 5) {
     return res.status(400).json({ error: 'A nota precisa ser um número inteiro entre 1 e 5' });
@@ -770,7 +785,7 @@ router.post('/:id/avaliar-pedido', asyncHandler(async (req, res) => {
   if (!pedido) {
     return res.status(404).json({ error: 'Pedido não encontrado' });
   }
-  if (!pedido.clienteId || pedido.clienteId !== clienteId) {
+  if (!pedido.clienteId || pedido.clienteId !== req.auth.clienteId) {
     return res.status(403).json({ error: 'Este pedido não pertence a este cliente' });
   }
   if (pedido.status !== 'ENTREGUE') {
@@ -825,8 +840,8 @@ router.post('/:id/avaliar-pedido', asyncHandler(async (req, res) => {
  *       404:
  *         description: Pedido não encontrado
  */
-router.post('/:id/avaliar-motoboy', asyncHandler(async (req, res) => {
-  const { clienteId, nota, comentario } = req.body;
+router.post('/:id/avaliar-motoboy', requireCliente(), asyncHandler(async (req, res) => {
+  const { nota, comentario } = req.body;
 
   if (!Number.isInteger(nota) || nota < 1 || nota > 5) {
     return res.status(400).json({ error: 'A nota precisa ser um número inteiro entre 1 e 5' });
@@ -838,7 +853,7 @@ router.post('/:id/avaliar-motoboy', asyncHandler(async (req, res) => {
   if (!pedido) {
     return res.status(404).json({ error: 'Pedido não encontrado' });
   }
-  if (!pedido.clienteId || pedido.clienteId !== clienteId) {
+  if (!pedido.clienteId || pedido.clienteId !== req.auth.clienteId) {
     return res.status(403).json({ error: 'Este pedido não pertence a este cliente' });
   }
   if (pedido.status !== 'ENTREGUE') {

@@ -1,6 +1,7 @@
 const { Router } = require('express');
 const prisma = require('../lib/prisma');
 const loadEmpresa = require('../lib/loadEmpresa');
+const { requireEmpresaAdmin } = require('../lib/auth');
 
 const router = Router({ mergeParams: true });
 
@@ -107,7 +108,7 @@ router.get('/', asyncHandler(async (req, res) => {
  *       400:
  *         description: Dados inválidos
  */
-router.post('/', asyncHandler(async (req, res) => {
+router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
   const { imagemUrl, titulo, subtitulo, badgeLabel, linkUrl, ordem, ativo } = req.body;
 
   const erros = validarPayload(req.body);
@@ -158,7 +159,7 @@ router.post('/', asyncHandler(async (req, res) => {
  *       404:
  *         description: Slide não encontrado
  */
-router.put('/:id', asyncHandler(async (req, res) => {
+router.put('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
   const { imagemUrl, titulo, subtitulo, badgeLabel, linkUrl, ordem, ativo } = req.body;
 
   const erros = validarPayload(req.body);
@@ -222,7 +223,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
  *       404:
  *         description: Slide não encontrado
  */
-router.patch('/:id/status', asyncHandler(async (req, res) => {
+router.patch('/:id/status', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
   const { ativo } = req.body;
   if (typeof ativo !== 'boolean') {
     return res.status(400).json({ error: 'Campo "ativo" é obrigatório e deve ser booleano' });
@@ -264,7 +265,7 @@ router.patch('/:id/status', asyncHandler(async (req, res) => {
  *       404:
  *         description: Slide não encontrado
  */
-router.delete('/:id', asyncHandler(async (req, res) => {
+router.delete('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
   const existente = await prisma.heroSlide.findFirst({
     where: { id: req.params.id, empresaId: req.params.empresaId },
   });

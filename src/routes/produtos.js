@@ -1,6 +1,7 @@
 const { Router } = require('express');
 const prisma = require('../lib/prisma');
 const loadEmpresa = require('../lib/loadEmpresa');
+const { requireEmpresaAdmin } = require('../lib/auth');
 
 const router = Router({ mergeParams: true });
 
@@ -192,7 +193,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
  *       400:
  *         description: Dados inválidos
  */
-router.post('/', asyncHandler(async (req, res) => {
+router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
   const {
     nome, descricao, categoriaId, preco, precoPromocional, fotoUrl, ativo, ordem,
     controlarEstoque, estoqueQtd, ehCombo,
@@ -255,7 +256,7 @@ router.post('/', asyncHandler(async (req, res) => {
  *       404:
  *         description: Produto não encontrado
  */
-router.put('/:id', asyncHandler(async (req, res) => {
+router.put('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
   const {
     nome, descricao, categoriaId, preco, precoPromocional, fotoUrl, ativo, ordem,
     controlarEstoque, estoqueQtd, ehCombo,
@@ -332,7 +333,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
  *       404:
  *         description: Produto não encontrado
  */
-router.patch('/:id/status', asyncHandler(async (req, res) => {
+router.patch('/:id/status', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
   const { ativo } = req.body;
   if (typeof ativo !== 'boolean') {
     return res.status(400).json({ error: 'Campo "ativo" é obrigatório e deve ser booleano' });
@@ -383,7 +384,7 @@ router.patch('/:id/status', asyncHandler(async (req, res) => {
  *       404:
  *         description: Produto não encontrado
  */
-router.patch('/:id/esgotado', asyncHandler(async (req, res) => {
+router.patch('/:id/esgotado', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
   const { esgotadoHoje } = req.body;
   if (typeof esgotadoHoje !== 'boolean') {
     return res.status(400).json({ error: 'Campo "esgotadoHoje" é obrigatório e deve ser booleano' });
@@ -425,7 +426,7 @@ router.patch('/:id/esgotado', asyncHandler(async (req, res) => {
  *       404:
  *         description: Produto não encontrado
  */
-router.delete('/:id', asyncHandler(async (req, res) => {
+router.delete('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
   const existente = await prisma.produto.findFirst({
     where: { id: req.params.id, empresaId: req.params.empresaId },
   });

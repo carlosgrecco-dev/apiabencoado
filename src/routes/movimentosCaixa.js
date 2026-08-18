@@ -1,6 +1,7 @@
 const { Router } = require('express');
 const prisma = require('../lib/prisma');
 const loadEmpresa = require('../lib/loadEmpresa');
+const { requireEmpresaAdmin } = require('../lib/auth');
 
 const router = Router({ mergeParams: true });
 
@@ -9,6 +10,7 @@ const asyncHandler = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 const TIPOS_VALIDOS = ['ENTRADA', 'SAIDA', 'FECHAMENTO'];
 
 router.use(loadEmpresa);
+router.use(requireEmpresaAdmin());
 
 /**
  * @openapi

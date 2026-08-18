@@ -1,10 +1,13 @@
 const { Router } = require('express');
 const prisma = require('../lib/prisma');
 const { registrarLog } = require('../lib/auditLog');
+const { requireSuperAdmin } = require('../lib/auth');
 
 const router = Router();
 
 const asyncHandler = (fn) => (req, res, next) => fn(req, res, next).catch(next);
+
+router.use(requireSuperAdmin);
 
 const STATUS_VALIDOS = ['PENDENTE', 'PAGO', 'ATRASADO'];
 

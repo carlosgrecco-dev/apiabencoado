@@ -6,13 +6,6 @@ datasource db {
   provider = "postgresql"
 }
 
-model GrupoUsuario {
-  id   String @id @default(uuid()) @db.Uuid
-  nome String
-
-  @@map("grupo_usuarios")
-}
-
 model Empresa {
   id              String   @id @default(uuid()) @db.Uuid
   nome            String

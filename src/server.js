@@ -4,7 +4,8 @@ const express = require('express');
 const cors = require('cors');
 const swaggerUi = require('swagger-ui-express');
 const swaggerSpec = require('./swagger');
-const gruposRouter = require('./routes/grupos');
+const { authenticate } = require('./lib/auth');
+const superAdminRouter = require('./routes/superAdmin');
 const empresasRouter = require('./routes/empresas');
 const motoboysRouter = require('./routes/motoboys');
 const movimentosCaixaRouter = require('./routes/movimentosCaixa');
@@ -36,6 +37,7 @@ const PORT = process.env.PORT || 3001;
 app.set('trust proxy', true);
 app.use(cors());
 app.use(express.json());
+app.use(authenticate);
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
 
 // Garante que campos Decimal (preco, valor, taxa...) saiam como number no JSON, não string.
@@ -102,7 +104,7 @@ app.get('/ping', (req, res) => {
   res.json({ message: 'pong' });
 });
 
-app.use('/grupos', gruposRouter);
+app.use('/super-admin', superAdminRouter);
 app.use('/empresas', empresasRouter);
 app.use('/empresas/:empresaId/motoboys', motoboysRouter);
 app.use('/empresas/:empresaId/movimentos-caixa', movimentosCaixaRouter);

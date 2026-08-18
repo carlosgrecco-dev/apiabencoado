@@ -3,12 +3,14 @@ const bcrypt = require('bcryptjs');
 const prisma = require('../lib/prisma');
 const loadEmpresa = require('../lib/loadEmpresa');
 const { disponibilidadeFidelidade, creditarUnidadesFidelidade } = require('../lib/fidelidade');
+const { signToken, requireEmpresaAdmin, requireCliente } = require('../lib/auth');
 
 const router = Router({ mergeParams: true });
 
 const asyncHandler = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 const SALT_ROUNDS = 10;
+const CLIENTE_TOKEN_TTL = '30d';
 
 router.use(loadEmpresa);
 
@@ -90,7 +92,8 @@ router.post('/signup', asyncHandler(async (req, res) => {
     data: { empresaId: req.params.empresaId, nome, telefone: telefone || null, email, senhaHash },
   });
 
-  res.status(201).json(serializeCliente(cliente));
+  const token = signToken({ role: 'CLIENTE', empresaId: req.params.empresaId, clienteId: cliente.id }, CLIENTE_TOKEN_TTL);
+  res.status(201).json({ ...serializeCliente(cliente), token });
 }));
 
 /**
@@ -138,7 +141,8 @@ router.post('/login', asyncHandler(async (req, res) => {
     return res.status(401).json({ error: 'E-mail ou senha incorretos' });
   }
 
-  res.json(serializeCliente(cliente));
+  const token = signToken({ role: 'CLIENTE', empresaId: req.params.empresaId, clienteId: cliente.id }, CLIENTE_TOKEN_TTL);
+  res.json({ ...serializeCliente(cliente), token });
 }));
 
 /**
@@ -156,7 +160,7 @@ router.post('/login', asyncHandler(async (req, res) => {
  *       200:
  *         description: Lista de clientes
  */
-router.get('/', asyncHandler(async (req, res) => {
+router.get('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
   const clientes = await prisma.cliente.findMany({
     where: { empresaId: req.params.empresaId },
     orderBy: { nome: 'asc' },
@@ -185,7 +189,7 @@ router.get('/', asyncHandler(async (req, res) => {
  *       404:
  *         description: Cliente não encontrado
  */
-router.get('/:id', asyncHandler(async (req, res) => {
+router.get('/:id', requireCliente('id'), asyncHandler(async (req, res) => {
   const cliente = await prisma.cliente.findFirst({
     where: { id: req.params.id, empresaId: req.params.empresaId },
   });
@@ -214,7 +218,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
  *       200:
  *         description: Lista de pedidos do cliente
  */
-router.get('/:id/pedidos', asyncHandler(async (req, res) => {
+router.get('/:id/pedidos', requireCliente('id'), asyncHandler(async (req, res) => {
   const pedidos = await prisma.pedido.findMany({
     where: { clienteId: req.params.id, empresaId: req.params.empresaId },
     include: { itens: { include: { opcoesSelecionadas: true } } },
@@ -246,7 +250,7 @@ router.get('/:id/pedidos', asyncHandler(async (req, res) => {
  *       404:
  *         description: Cliente não encontrado
  */
-router.post('/:id/liberar-resgate', asyncHandler(async (req, res) => {
+router.post('/:id/liberar-resgate', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
   const cliente = await prisma.cliente.findFirst({ where: { id: req.params.id, empresaId: req.params.empresaId } });
   if (!cliente) {
     return res.status(404).json({ error: 'Cliente não encontrado' });
@@ -299,7 +303,7 @@ router.post('/:id/liberar-resgate', asyncHandler(async (req, res) => {
  *       404:
  *         description: Cliente não encontrado
  */
-router.post('/:id/adicionar-unidades', asyncHandler(async (req, res) => {
+router.post('/:id/adicionar-unidades', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
   const unidades = Number(req.body.unidades);
   if (!Number.isInteger(unidades) || unidades < 1) {
     return res.status(400).json({ error: 'Campo "unidades" deve ser um número inteiro maior que zero' });

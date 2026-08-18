@@ -1,12 +1,14 @@
 const { Router } = require('express');
 const prisma = require('../lib/prisma');
 const loadEmpresa = require('../lib/loadEmpresa');
+const { requireEmpresaAdmin } = require('../lib/auth');
 
 const router = Router({ mergeParams: true });
 
 const asyncHandler = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 router.use(loadEmpresa);
+router.use(requireEmpresaAdmin());
 
 const dataInicio = (de) => (de ? new Date(`${de}T00:00:00`) : undefined);
 const dataFim = (ate) => (ate ? new Date(`${ate}T23:59:59`) : undefined);

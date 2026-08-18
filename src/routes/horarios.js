@@ -1,12 +1,14 @@
 const { Router } = require('express');
 const prisma = require('../lib/prisma');
 const loadEmpresa = require('../lib/loadEmpresa');
+const { requireEmpresaAdmin } = require('../lib/auth');
 
 const router = Router({ mergeParams: true });
 
 const asyncHandler = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 router.use(loadEmpresa);
+router.use(requireEmpresaAdmin());
 
 const HORA_REGEX = /^([01]\d|2[0-3]):([0-5]\d)$/;
 

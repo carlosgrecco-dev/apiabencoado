@@ -1,9 +1,12 @@
 const { Router } = require('express');
 const prisma = require('../lib/prisma');
+const { requireSuperAdmin } = require('../lib/auth');
 
 const router = Router();
 
 const asyncHandler = (fn) => (req, res, next) => fn(req, res, next).catch(next);
+
+router.use(requireSuperAdmin);
 
 const TIPOS_VALIDOS = ['ACESSO', 'ERRO', 'ALTERACAO_CRITICA'];
 

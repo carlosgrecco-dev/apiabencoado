@@ -1,5 +1,6 @@
 const { Router } = require('express');
 const prisma = require('../lib/prisma');
+const { requireCliente } = require('../lib/auth');
 
 const router = Router({ mergeParams: true });
 
@@ -17,6 +18,8 @@ const loadCliente = asyncHandler(async (req, res, next) => {
   next();
 });
 
+// Endereços salvos são sempre do próprio cliente — nenhum caso de uso de admin aqui.
+router.use(requireCliente('clienteId'));
 router.use(loadCliente);
 
 const handlePrismaError = (error, res) => {

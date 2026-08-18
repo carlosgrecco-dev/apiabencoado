@@ -1,12 +1,14 @@
 const { Router } = require('express');
 const prisma = require('../lib/prisma');
 const loadEmpresa = require('../lib/loadEmpresa');
+const { requireEmpresaAdmin } = require('../lib/auth');
 
 const router = Router({ mergeParams: true });
 
 const asyncHandler = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 router.use(loadEmpresa);
+router.use(requireEmpresaAdmin());
 
 const TIPOS_VALIDOS = ['BAIRRO', 'RAIO_KM', 'FAIXA_DISTANCIA'];
 

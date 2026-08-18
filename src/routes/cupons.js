@@ -2,6 +2,7 @@ const { Router } = require('express');
 const prisma = require('../lib/prisma');
 const loadEmpresa = require('../lib/loadEmpresa');
 const validarCupom = require('../lib/validarCupom');
+const { requireEmpresaAdmin } = require('../lib/auth');
 
 const router = Router({ mergeParams: true });
 
@@ -120,7 +121,7 @@ router.get('/', asyncHandler(async (req, res) => {
  *       409:
  *         description: Código já cadastrado
  */
-router.post('/', asyncHandler(async (req, res) => {
+router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
   const { codigo, descricao, tipo, valor, apenasPrimeiraCompra, valorMinimoPedido, usoMaximo, validoAte, ativo } = req.body;
 
   const erros = validarPayload(req.body);
@@ -176,7 +177,7 @@ router.post('/', asyncHandler(async (req, res) => {
  *       404:
  *         description: Cupom não encontrado
  */
-router.put('/:id', asyncHandler(async (req, res) => {
+router.put('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
   const { codigo, descricao, tipo, valor, apenasPrimeiraCompra, valorMinimoPedido, usoMaximo, validoAte, ativo } = req.body;
 
   const erros = validarPayload(req.body);
@@ -240,7 +241,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
  *       404:
  *         description: Cupom não encontrado
  */
-router.patch('/:id/status', asyncHandler(async (req, res) => {
+router.patch('/:id/status', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
   const { ativo } = req.body;
   if (typeof ativo !== 'boolean') {
     return res.status(400).json({ error: 'Campo "ativo" é obrigatório e deve ser booleano' });
@@ -274,7 +275,7 @@ router.patch('/:id/status', asyncHandler(async (req, res) => {
  *       404:
  *         description: Cupom não encontrado
  */
-router.delete('/:id', asyncHandler(async (req, res) => {
+router.delete('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
   const existente = await prisma.cupom.findFirst({ where: { id: req.params.id, empresaId: req.params.empresaId } });
   if (!existente) {
     return res.status(404).json({ error: 'Cupom não encontrado' });
@@ -312,13 +313,19 @@ router.delete('/:id', asyncHandler(async (req, res) => {
  *         description: Cupom inválido para este pedido
  */
 router.post('/validar', asyncHandler(async (req, res) => {
-  const { codigo, subtotal, clienteId } = req.body;
+  const { codigo, subtotal } = req.body;
 
   if (subtotal === undefined || Number.isNaN(Number(subtotal))) {
     return res.status(400).json({ error: 'Campo "subtotal" é obrigatório' });
   }
 
-  const resultado = await validarCupom(prisma, req.params.empresaId, codigo, clienteId || null, Number(subtotal));
+  // clienteId nunca vem do corpo — só do token de quem estiver logado como CLIENTE desta
+  // empresa, pra ninguém forjar elegibilidade de cupom de "primeira compra" em nome de outro.
+  const clienteId = (req.auth && req.auth.role === 'CLIENTE' && req.auth.empresaId === req.params.empresaId)
+    ? req.auth.clienteId
+    : null;
+
+  const resultado = await validarCupom(prisma, req.params.empresaId, codigo, clienteId, Number(subtotal));
 
   if (!resultado.ok) {
     return res.status(400).json({ error: resultado.error });

@@ -3,6 +3,9 @@ const bcrypt = require('bcryptjs');
 const prisma = require('../lib/prisma');
 const { calcularStatusLoja } = require('../lib/statusLoja');
 const { registrarLog } = require('../lib/auditLog');
+const { signToken, requireSuperAdmin, requireEmpresaAdmin } = require('../lib/auth');
+
+const ADMIN_TOKEN_TTL = '12h';
 
 const router = Router();
 
@@ -179,7 +182,7 @@ const handlePrismaError = (error, res) => {
  *               items:
  *                 $ref: '#/components/schemas/Empresa'
  */
-router.get('/', asyncHandler(async (req, res) => {
+router.get('/', requireSuperAdmin, asyncHandler(async (req, res) => {
   const { q } = req.query;
 
   const where = q
@@ -357,7 +360,7 @@ router.get('/slug/:slug', asyncHandler(async (req, res) => {
  *       404:
  *         description: Empresa não encontrada
  */
-router.get('/:id', asyncHandler(async (req, res) => {
+router.get('/:id', requireEmpresaAdmin('id'), asyncHandler(async (req, res) => {
   const empresa = await prisma.empresa.findUnique({ where: { id: req.params.id } });
 
   if (!empresa) {
@@ -391,7 +394,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
  *       409:
  *         description: Campo único já cadastrado
  */
-router.post('/', asyncHandler(async (req, res) => {
+router.post('/', requireSuperAdmin, asyncHandler(async (req, res) => {
   const {
     nome, responsavelNome, email, telefone, documento, slug, usuario, senha,
     empresaAtiva, adminAtivo, planoId, comissaoPercent,
@@ -493,7 +496,7 @@ router.post('/', asyncHandler(async (req, res) => {
  *       409:
  *         description: Campo único já cadastrado
  */
-router.put('/:id', asyncHandler(async (req, res) => {
+router.put('/:id', requireSuperAdmin, asyncHandler(async (req, res) => {
   const {
     nome, responsavelNome, email, telefone, documento, slug, usuario,
     empresaAtiva, adminAtivo,
@@ -551,7 +554,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
  *       404:
  *         description: Empresa não encontrada
  */
-router.patch('/:id/status-empresa', asyncHandler(async (req, res) => {
+router.patch('/:id/status-empresa', requireSuperAdmin, asyncHandler(async (req, res) => {
   const { ativo } = req.body;
   if (typeof ativo !== 'boolean') {
     return res.status(400).json({ error: 'Campo "ativo" é obrigatório e deve ser booleano' });
@@ -597,7 +600,7 @@ router.patch('/:id/status-empresa', asyncHandler(async (req, res) => {
  *       404:
  *         description: Empresa não encontrada
  */
-router.patch('/:id/status-admin', asyncHandler(async (req, res) => {
+router.patch('/:id/status-admin', requireSuperAdmin, asyncHandler(async (req, res) => {
   const { ativo } = req.body;
   if (typeof ativo !== 'boolean') {
     return res.status(400).json({ error: 'Campo "ativo" é obrigatório e deve ser booleano' });
@@ -645,7 +648,7 @@ router.patch('/:id/status-admin', asyncHandler(async (req, res) => {
  *       404:
  *         description: Empresa não encontrada
  */
-router.post('/:id/reset-senha', asyncHandler(async (req, res) => {
+router.post('/:id/reset-senha', requireSuperAdmin, asyncHandler(async (req, res) => {
   const { senha } = req.body;
   if (!senha || String(senha).length < 6) {
     return res.status(400).json({ error: 'Campo "senha" é obrigatório e deve ter ao menos 6 caracteres' });
@@ -686,7 +689,7 @@ router.post('/:id/reset-senha', asyncHandler(async (req, res) => {
  *       404:
  *         description: Empresa não encontrada
  */
-router.delete('/:id', asyncHandler(async (req, res) => {
+router.delete('/:id', requireSuperAdmin, asyncHandler(async (req, res) => {
   try {
     await prisma.empresa.delete({ where: { id: req.params.id } });
     res.status(204).send();
@@ -750,7 +753,8 @@ router.post('/:id/admin-login', asyncHandler(async (req, res) => {
   }
 
   await registrarLog({ tipo: 'ACESSO', empresaId: empresa.id, empresaNome: empresa.nome, ator: usuario, acao: 'Login no admin da loja' });
-  res.json({ id: empresa.id, nome: empresa.nome, usuario: empresa.usuario });
+  const token = signToken({ role: 'EMPRESA_ADMIN', empresaId: empresa.id }, ADMIN_TOKEN_TTL);
+  res.json({ id: empresa.id, nome: empresa.nome, usuario: empresa.usuario, token });
 }));
 
 /**
@@ -803,6 +807,7 @@ router.post('/admin-login', asyncHandler(async (req, res) => {
   }
 
   await registrarLog({ tipo: 'ACESSO', empresaId: empresa.id, empresaNome: empresa.nome, ator: usuario, acao: 'Login no admin da loja (app)' });
+  const token = signToken({ role: 'EMPRESA_ADMIN', empresaId: empresa.id }, ADMIN_TOKEN_TTL);
   res.json({
     id: empresa.id,
     nome: empresa.nome,
@@ -811,6 +816,7 @@ router.post('/admin-login', asyncHandler(async (req, res) => {
     corPrimaria: empresa.corPrimaria,
     corSecundaria: empresa.corSecundaria,
     logoUrl: empresa.logoUrl,
+    token,
   });
 }));
 
@@ -842,7 +848,7 @@ router.post('/admin-login', asyncHandler(async (req, res) => {
  *       404:
  *         description: Empresa não encontrada
  */
-router.patch('/:id/comissao', asyncHandler(async (req, res) => {
+router.patch('/:id/comissao', requireSuperAdmin, asyncHandler(async (req, res) => {
   const valor = Number(req.body.comissaoPercent);
   if (Number.isNaN(valor) || valor < 5 || valor > 20) {
     return res.status(400).json({ error: 'O percentual de comissão deve estar entre 5 e 20' });
@@ -884,7 +890,7 @@ router.patch('/:id/comissao', asyncHandler(async (req, res) => {
  *       404:
  *         description: Empresa não encontrada
  */
-router.patch('/:id/comissao-visibilidade', asyncHandler(async (req, res) => {
+router.patch('/:id/comissao-visibilidade', requireSuperAdmin, asyncHandler(async (req, res) => {
   const { ocultarComissaoTenant } = req.body;
   if (typeof ocultarComissaoTenant !== 'boolean') {
     return res.status(400).json({ error: 'Campo "ocultarComissaoTenant" é obrigatório e deve ser booleano' });
@@ -929,7 +935,7 @@ router.patch('/:id/comissao-visibilidade', asyncHandler(async (req, res) => {
  *       404:
  *         description: Empresa ou plano não encontrado
  */
-router.patch('/:id/plano', asyncHandler(async (req, res) => {
+router.patch('/:id/plano', requireSuperAdmin, asyncHandler(async (req, res) => {
   const { planoId } = req.body;
 
   if (!planoId) {
@@ -987,7 +993,7 @@ router.patch('/:id/plano', asyncHandler(async (req, res) => {
  *       404:
  *         description: Empresa não encontrada
  */
-router.patch('/:id/loja-aberta', asyncHandler(async (req, res) => {
+router.patch('/:id/loja-aberta', requireEmpresaAdmin('id'), asyncHandler(async (req, res) => {
   const { aberta } = req.body;
   if (typeof aberta !== 'boolean') {
     return res.status(400).json({ error: 'Campo "aberta" é obrigatório e deve ser booleano' });
@@ -1034,7 +1040,7 @@ router.patch('/:id/loja-aberta', asyncHandler(async (req, res) => {
  *       404:
  *         description: Empresa não encontrada
  */
-router.put('/:id/operacional', asyncHandler(async (req, res) => {
+router.put('/:id/operacional', requireEmpresaAdmin('id'), asyncHandler(async (req, res) => {
   const { usarHorarioAutomatico, tempoEstimadoMin, tempoEstimadoMax, pedidoMinimo } = req.body;
 
   const erros = [];
@@ -1091,7 +1097,7 @@ router.put('/:id/operacional', asyncHandler(async (req, res) => {
  *       404:
  *         description: Empresa não encontrada
  */
-router.put('/:id/frete-config', asyncHandler(async (req, res) => {
+router.put('/:id/frete-config', requireEmpresaAdmin('id'), asyncHandler(async (req, res) => {
   const { freteGratisAcimaDe } = req.body;
 
   if (freteGratisAcimaDe !== undefined && freteGratisAcimaDe !== null && (Number.isNaN(Number(freteGratisAcimaDe)) || Number(freteGratisAcimaDe) < 0)) {
@@ -1138,7 +1144,7 @@ router.put('/:id/frete-config', asyncHandler(async (req, res) => {
  *       404:
  *         description: Empresa não encontrada
  */
-router.put('/:id/fidelidade-config', asyncHandler(async (req, res) => {
+router.put('/:id/fidelidade-config', requireEmpresaAdmin('id'), asyncHandler(async (req, res) => {
   const { fidelidadeLogoUrl, fidelidadeValidadeDias, fidelidadeAvisoFaltam, fidelidadeNomeItem } = req.body;
 
   const erros = [];
@@ -1215,7 +1221,7 @@ const HEX_COLOR_REGEX = /^#[0-9a-fA-F]{6}$/;
  *       404:
  *         description: Empresa não encontrada
  */
-router.put('/:id/aparencia', asyncHandler(async (req, res) => {
+router.put('/:id/aparencia', requireEmpresaAdmin('id'), asyncHandler(async (req, res) => {
   const {
     corPrimaria, corSecundaria, logoUrl, faviconUrl,
     heroUsarCarrossel, heroTitulo, heroSubtitulo, heroBadgeLabel, heroImagemUrl, heroLinkUrl,

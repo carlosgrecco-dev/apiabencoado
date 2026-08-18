@@ -2,12 +2,14 @@ const { Router } = require('express');
 const bcrypt = require('bcryptjs');
 const prisma = require('../lib/prisma');
 const loadEmpresa = require('../lib/loadEmpresa');
+const { signToken, requireEmpresaAdmin, requireMotoboy } = require('../lib/auth');
 
 const router = Router({ mergeParams: true });
 
 const asyncHandler = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 const SALT_ROUNDS = 10;
+const MOTOBOY_TOKEN_TTL = '30d';
 
 router.use(loadEmpresa);
 
@@ -101,7 +103,8 @@ router.post('/login', asyncHandler(async (req, res) => {
     return res.status(401).json({ error: 'Telefone ou PIN inválidos' });
   }
 
-  res.json({ id: motoboy.id, nome: motoboy.nome });
+  const token = signToken({ role: 'MOTOBOY', empresaId: req.params.empresaId, motoboyId: motoboy.id }, MOTOBOY_TOKEN_TTL);
+  res.json({ id: motoboy.id, nome: motoboy.nome, token });
 }));
 
 /**
@@ -122,7 +125,7 @@ router.post('/login', asyncHandler(async (req, res) => {
  *       200:
  *         description: Lista de motoboys
  */
-router.get('/', asyncHandler(async (req, res) => {
+router.get('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
   const { ativo } = req.query;
   const where = {
     empresaId: req.params.empresaId,
@@ -154,7 +157,7 @@ router.get('/', asyncHandler(async (req, res) => {
  *       404:
  *         description: Motoboy não encontrado
  */
-router.get('/:id', asyncHandler(async (req, res) => {
+router.get('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
   const motoboy = await prisma.motoboy.findFirst({
     where: { id: req.params.id, empresaId: req.params.empresaId },
   });
@@ -189,7 +192,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
  *       400:
  *         description: Dados inválidos
  */
-router.post('/', asyncHandler(async (req, res) => {
+router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
   const { nome, telefone, taxaPadrao, ativo } = req.body;
 
   if (!nome) {
@@ -236,7 +239,7 @@ router.post('/', asyncHandler(async (req, res) => {
  *       404:
  *         description: Motoboy não encontrado
  */
-router.put('/:id', asyncHandler(async (req, res) => {
+router.put('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
   const { nome, telefone, taxaPadrao, ativo } = req.body;
 
   if (!nome) {
@@ -297,7 +300,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
  *       404:
  *         description: Motoboy não encontrado
  */
-router.patch('/:id/status', asyncHandler(async (req, res) => {
+router.patch('/:id/status', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
   const { ativo } = req.body;
   if (typeof ativo !== 'boolean') {
     return res.status(400).json({ error: 'Campo "ativo" é obrigatório e deve ser booleano' });
@@ -345,7 +348,7 @@ router.patch('/:id/status', asyncHandler(async (req, res) => {
  *       404:
  *         description: Motoboy não encontrado
  */
-router.post('/:id/pin', asyncHandler(async (req, res) => {
+router.post('/:id/pin', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
   const { pin } = req.body;
   if (!pin || String(pin).length < 4) {
     return res.status(400).json({ error: 'Campo "pin" é obrigatório e deve ter ao menos 4 dígitos' });
@@ -400,7 +403,7 @@ router.post('/:id/pin', asyncHandler(async (req, res) => {
  *       404:
  *         description: Motoboy não encontrado
  */
-router.patch('/:id/localizacao', asyncHandler(async (req, res) => {
+router.patch('/:id/localizacao', requireMotoboy('id'), asyncHandler(async (req, res) => {
   const { latitude, longitude } = req.body;
   const lat = Number(latitude);
   const lng = Number(longitude);
@@ -445,7 +448,7 @@ router.patch('/:id/localizacao', asyncHandler(async (req, res) => {
  *       404:
  *         description: Motoboy não encontrado
  */
-router.delete('/:id', asyncHandler(async (req, res) => {
+router.delete('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
   const existente = await prisma.motoboy.findFirst({
     where: { id: req.params.id, empresaId: req.params.empresaId },
   });
