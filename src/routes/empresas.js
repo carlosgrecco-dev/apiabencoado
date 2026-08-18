@@ -334,6 +334,72 @@ router.get('/slug/:slug/manifest.json', asyncHandler(async (req, res) => {
   });
 }));
 
+/** Escapa texto pra uso seguro dentro de atributos/conteúdo HTML (título e descrição vêm do lojista). */
+const escapeHtml = (value = '') =>
+  String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+/**
+ * @openapi
+ * /empresas/slug/{slug}/embed:
+ *   get:
+ *     summary: Página estática com meta tags Open Graph da loja — só pra crawlers de preview de link (WhatsApp, Facebook etc.)
+ *     tags: [Empresas]
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: HTML com as meta tags da loja
+ *       404:
+ *         description: Empresa não encontrada
+ */
+router.get('/slug/:slug/embed', asyncHandler(async (req, res) => {
+  const slug = req.params.slug.toLowerCase();
+  const empresa = await prisma.empresa.findUnique({
+    where: { slug },
+    select: { nome: true, descricao: true, logoUrl: true },
+  });
+
+  if (!empresa) {
+    return res.status(404).send('Empresa não encontrada');
+  }
+
+  const frontOrigin = process.env.FRONT_ORIGIN || 'https://saltfood.com.br';
+  const url = `${frontOrigin}/${slug}`;
+  const titulo = escapeHtml(empresa.nome);
+  const descricao = escapeHtml(empresa.descricao || `Peça online na ${empresa.nome}, com entrega rápida.`);
+  const imagem = escapeHtml(empresa.logoUrl || `${frontOrigin}/saltfood.png`);
+
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  res.send(`<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<title>${titulo}</title>
+<meta property="og:type" content="website">
+<meta property="og:title" content="${titulo}">
+<meta property="og:description" content="${descricao}">
+<meta property="og:image" content="${imagem}">
+<meta property="og:url" content="${url}">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="${titulo}">
+<meta name="twitter:description" content="${descricao}">
+<meta name="twitter:image" content="${imagem}">
+<meta http-equiv="refresh" content="0; url=${url}">
+</head>
+<body>
+<p>Redirecionando para ${titulo}... <a href="${url}">clique aqui</a> se não for automático.</p>
+</body>
+</html>`);
+}));
+
 router.get('/slug/:slug', asyncHandler(async (req, res) => {
   const empresa = await prisma.empresa.findUnique({
     where: { slug: req.params.slug.toLowerCase() },
