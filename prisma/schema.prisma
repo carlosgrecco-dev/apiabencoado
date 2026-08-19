@@ -241,6 +241,15 @@ model Cliente {
   /// Quando o item grátis mais recente foi liberado — usado para calcular o prazo de validade (Empresa.fidelidadeValidadeDias).
   itemGratisGanhoEm      DateTime? @map("item_gratis_ganho_em")
 
+  // Indicação: cada cliente tem um código próprio pra compartilhar; quem se cadastra usando o
+  // código de alguém fica marcado como indicado, e os dois ganham unidades de fidelidade quando
+  // o indicado completa a primeira compra (ver PATCH /pedidos/:id/status).
+  codigoIndicacao       String?   @map("codigo_indicacao")
+  indicadoPorId         String?   @map("indicado_por_id") @db.Uuid
+  indicadoPor           Cliente?  @relation("Indicacoes", fields: [indicadoPorId], references: [id], onDelete: SetNull)
+  indicados             Cliente[] @relation("Indicacoes")
+  indicacaoRecompensada Boolean   @default(false) @map("indicacao_recompensada")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -248,6 +257,7 @@ model Cliente {
   enderecos EnderecoCliente[]
 
   @@unique([empresaId, email])
+  @@unique([empresaId, codigoIndicacao])
   @@map("clientes")
 }
 
@@ -522,10 +532,25 @@ model Pedido {
   entregueEm     DateTime? @map("entregue_em")
   canceladoEm    DateTime? @map("cancelado_em")
 
-  itens PedidoItem[]
+  itens             PedidoItem[]
+  pushSubscriptions PushSubscription[]
 
   @@unique([empresaId, numero])
   @@map("pedidos")
+}
+
+/// Inscrição de push do navegador na página de acompanhamento de um pedido — permite avisar
+/// (sem precisar de app nativo) quando o status mudar, mesmo com a aba fechada.
+model PushSubscription {
+  id        String   @id @default(uuid()) @db.Uuid
+  pedidoId  String   @map("pedido_id") @db.Uuid
+  pedido    Pedido   @relation(fields: [pedidoId], references: [id], onDelete: Cascade)
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("push_subscriptions")
 }
 
 model PedidoItem {

@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const prisma = require('../lib/prisma');
 const loadEmpresa = require('../lib/loadEmpresa');
 const { disponibilidadeFidelidade, creditarUnidadesFidelidade } = require('../lib/fidelidade');
+const { gerarCodigoIndicacaoUnico } = require('../lib/indicacao');
 const { signToken, requireEmpresaAdmin, requireCliente } = require('../lib/auth');
 
 const router = Router({ mergeParams: true });
@@ -18,6 +19,13 @@ router.use(loadEmpresa);
 const serializeCliente = (cliente) => {
   const { senhaHash, ...rest } = cliente;
   return rest;
+};
+
+/** Clientes criados antes do sistema de indicação existir não têm codigoIndicacao — gera na primeira vez que aparecem. */
+const garantirCodigoIndicacao = async (cliente) => {
+  if (cliente.codigoIndicacao) return cliente;
+  const codigoIndicacao = await gerarCodigoIndicacaoUnico(cliente.empresaId);
+  return prisma.cliente.update({ where: { id: cliente.id }, data: { codigoIndicacao } });
 };
 
 /**
@@ -68,7 +76,7 @@ const serializeCliente = (cliente) => {
  *         description: E-mail já cadastrado
  */
 router.post('/signup', asyncHandler(async (req, res) => {
-  const { nome, telefone, email, senha } = req.body;
+  const { nome, telefone, email, senha, indicadoPor } = req.body;
 
   if (!nome || !email || !senha) {
     return res.status(400).json({ error: 'Campos "nome", "email" e "senha" são obrigatórios' });
@@ -87,9 +95,19 @@ router.post('/signup', asyncHandler(async (req, res) => {
     return res.status(409).json({ error: 'Este e-mail já está cadastrado' });
   }
 
+  // Código de quem indicou é opcional e silenciosamente ignorado se inválido — não trava o cadastro.
+  let indicadoPorId = null;
+  if (typeof indicadoPor === 'string' && indicadoPor.trim()) {
+    const referenciador = await prisma.cliente.findFirst({
+      where: { empresaId: req.params.empresaId, codigoIndicacao: indicadoPor.trim().toUpperCase() },
+    });
+    if (referenciador) indicadoPorId = referenciador.id;
+  }
+
+  const codigoIndicacao = await gerarCodigoIndicacaoUnico(req.params.empresaId);
   const senhaHash = await bcrypt.hash(senha, SALT_ROUNDS);
   const cliente = await prisma.cliente.create({
-    data: { empresaId: req.params.empresaId, nome, telefone: telefone || null, email, senhaHash },
+    data: { empresaId: req.params.empresaId, nome, telefone: telefone || null, email, senhaHash, codigoIndicacao, indicadoPorId },
   });
 
   const token = signToken({ role: 'CLIENTE', empresaId: req.params.empresaId, clienteId: cliente.id }, CLIENTE_TOKEN_TTL);
@@ -141,8 +159,9 @@ router.post('/login', asyncHandler(async (req, res) => {
     return res.status(401).json({ error: 'E-mail ou senha incorretos' });
   }
 
+  const clienteComCodigo = await garantirCodigoIndicacao(cliente);
   const token = signToken({ role: 'CLIENTE', empresaId: req.params.empresaId, clienteId: cliente.id }, CLIENTE_TOKEN_TTL);
-  res.json({ ...serializeCliente(cliente), token });
+  res.json({ ...serializeCliente(clienteComCodigo), token });
 }));
 
 /**
@@ -196,7 +215,8 @@ router.get('/:id', requireCliente('id'), asyncHandler(async (req, res) => {
   if (!cliente) {
     return res.status(404).json({ error: 'Cliente não encontrado' });
   }
-  res.json(serializeCliente(cliente));
+  const clienteComCodigo = await garantirCodigoIndicacao(cliente);
+  res.json(serializeCliente(clienteComCodigo));
 }));
 
 /**

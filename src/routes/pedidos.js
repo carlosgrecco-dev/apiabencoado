@@ -5,6 +5,8 @@ const validarCupom = require('../lib/validarCupom');
 const { calcularStatusLoja } = require('../lib/statusLoja');
 const { calcularFrete } = require('../lib/calcularFrete');
 const { disponibilidadeFidelidade, creditarUnidadesFidelidade } = require('../lib/fidelidade');
+const { RECOMPENSA_INDICACAO_UNIDADES } = require('../lib/indicacao');
+const { notificarPedido } = require('../lib/pushNotifications');
 const { requireEmpresaAdmin, requireCliente } = require('../lib/auth');
 
 const router = Router({ mergeParams: true });
@@ -531,10 +533,42 @@ router.patch('/:id/status', asyncHandler(async (req, res, next) => {
           data: { unidadesFidelidadeCreditadas: unidades },
         });
       }
+
+      // Indicação: se esse pedido é a primeira compra concluída de um cliente indicado por
+      // outro, credita fidelidade pros dois lados — uma única vez (indicacaoRecompensada trava).
+      if (salvo.clienteId) {
+        const cliente = await tx.cliente.findUnique({ where: { id: salvo.clienteId } });
+        if (cliente?.indicadoPorId && !cliente.indicacaoRecompensada) {
+          const pedidosAnterioresEntregues = await tx.pedido.count({
+            where: { clienteId: cliente.id, status: 'ENTREGUE', id: { not: salvo.id } },
+          });
+          if (pedidosAnterioresEntregues === 0) {
+            await creditarUnidadesFidelidade(tx, cliente.id, RECOMPENSA_INDICACAO_UNIDADES);
+            await creditarUnidadesFidelidade(tx, cliente.indicadoPorId, RECOMPENSA_INDICACAO_UNIDADES);
+            await tx.cliente.update({ where: { id: cliente.id }, data: { indicacaoRecompensada: true } });
+          }
+        }
+      }
     }
 
     return salvo;
   });
+
+  // Fora da transação (I/O externo) — se o push falhar, não deve derrubar a atualização do status.
+  const MENSAGEM_POR_STATUS = {
+    PREPARANDO: 'Seu pedido está sendo preparado!',
+    SAIU_ENTREGA: 'Seu pedido saiu para entrega!',
+    ENTREGUE: 'Seu pedido foi entregue. Bom apetite! 🎉',
+    CANCELADO: 'Seu pedido foi cancelado.',
+  };
+  if (MENSAGEM_POR_STATUS[atualizado.status]) {
+    const frontOrigin = process.env.FRONT_ORIGIN || 'https://saltfood.com.br';
+    notificarPedido(atualizado.id, {
+      title: `Pedido #${atualizado.numero}`,
+      body: MENSAGEM_POR_STATUS[atualizado.status],
+      url: `${frontOrigin}/${req.empresa.slug}/pedidos/${atualizado.id}`,
+    }).catch(() => {});
+  }
 
   res.json(atualizado);
 }));

@@ -28,6 +28,7 @@ const faturasRouter = require('./routes/faturas');
 const logsRouter = require('./routes/logs');
 const configuracoesPlataformaRouter = require('./routes/configuracoesPlataforma');
 const uploadRouter = require('./routes/upload');
+const pushSubscriptionsRouter = require('./routes/pushSubscriptions');
 const serializeDecimals = require('./lib/serializeDecimals');
 const { registrarLog } = require('./lib/auditLog');
 
@@ -122,6 +123,7 @@ app.use('/empresas/:empresaId/zonas-entrega', zonasEntregaRouter);
 app.use('/empresas/:empresaId/frete', freteRouter);
 app.use('/empresas/:empresaId/produtos/:produtoId/variacoes', produtoVariacoesRouter);
 app.use('/empresas/:empresaId/produtos/:produtoId/grupos-opcao', produtoGruposOpcaoRouter);
+app.use('/empresas/:empresaId/push', pushSubscriptionsRouter);
 app.use('/planos', planosRouter);
 app.use('/faturas', faturasRouter);
 app.use('/logs', logsRouter);

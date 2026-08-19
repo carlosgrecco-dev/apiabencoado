@@ -98,6 +98,36 @@ router.get('/resumo', asyncHandler(async (req, res) => {
   const comissaoPercent = Number(req.empresa.comissaoPercent);
   const comissaoValor = totalRevenue * (comissaoPercent / 100);
 
+  // Produtos mais vendidos — agrega os itens dos mesmos pedidos ENTREGUES já carregados acima.
+  const produtoMap = new Map();
+  for (const p of entregues) {
+    for (const item of p.itens) {
+      const atual = produtoMap.get(item.produtoId) || { produtoId: item.produtoId, nome: item.nomeProduto, quantidade: 0, receita: 0 };
+      atual.quantidade += item.quantidade;
+      atual.receita += Number(item.precoUnitario) * item.quantidade;
+      produtoMap.set(item.produtoId, atual);
+    }
+  }
+  const topProdutos = Array.from(produtoMap.values())
+    .sort((a, b) => b.quantidade - a.quantidade)
+    .slice(0, 10);
+
+  // Horários de pico — conta os pedidos entregues por hora do dia (0-23), pra ajudar a escalar equipe.
+  const porHoraMap = new Map();
+  for (const p of entregues) {
+    const hora = p.createdAt.getHours();
+    porHoraMap.set(hora, (porHoraMap.get(hora) || 0) + 1);
+  }
+  const porHora = Array.from({ length: 24 }, (_, hora) => ({ hora, pedidos: porHoraMap.get(hora) || 0 }));
+
+  // Distribuição por status no período — dá uma leitura de quanto foi cancelado vs concluído.
+  const porStatusRaw = await prisma.pedido.groupBy({
+    by: ['status'],
+    where: { empresaId: req.params.empresaId, createdAt: range },
+    _count: { _all: true },
+  });
+  const porStatus = porStatusRaw.map((s) => ({ status: s.status, quantidade: s._count._all }));
+
   res.json({
     totalRevenue,
     totalUnits,
@@ -111,6 +141,9 @@ router.get('/resumo', asyncHandler(async (req, res) => {
     comissaoPercent,
     comissaoValor,
     mostrarComissao: !req.empresa.ocultarComissaoTenant,
+    topProdutos,
+    porHora,
+    porStatus,
   });
 }));
 
