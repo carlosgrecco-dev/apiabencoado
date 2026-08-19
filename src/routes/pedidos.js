@@ -200,7 +200,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
 router.post('/', asyncHandler(async (req, res) => {
   const {
     clienteNome, clienteTelefone, endereco, bairro, referencia,
-    formaPagamento, trocoPara, observacoes, itens, usarItemGratis, cupomCodigo,
+    formaPagamento, trocoPara, observacoes, itens, usarItemGratis, cupomCodigo, agendadoPara,
   } = req.body;
 
   // Checkout aceita convidado (sem login) — clienteId nunca vem do corpo da requisição, só do
@@ -220,6 +220,14 @@ router.post('/', asyncHandler(async (req, res) => {
   if (!Array.isArray(itens) || itens.length === 0) {
     erros.push('O pedido precisa de ao menos um item');
   }
+  let agendadoParaData = null;
+  if (agendadoPara) {
+    agendadoParaData = new Date(agendadoPara);
+    if (Number.isNaN(agendadoParaData.getTime()) || agendadoParaData.getTime() <= Date.now()) {
+      erros.push('Campo "agendadoPara" precisa ser uma data/hora válida no futuro');
+    }
+  }
+
   if (erros.length) {
     return res.status(400).json({ error: erros.join('; ') });
   }
@@ -386,6 +394,7 @@ router.post('/', asyncHandler(async (req, res) => {
         formaPagamento,
         trocoPara: trocoPara || null,
         observacoes: observacoes || null,
+        agendadoPara: agendadoParaData,
         clienteId: cliente?.id || null,
         itemGratisResgatado: resgatouItemGratis,
         cupomId: cupomAplicado?.id || null,
@@ -475,7 +484,7 @@ router.patch('/:id/status', asyncHandler(async (req, res, next) => {
   }
   next();
 }), asyncHandler(async (req, res) => {
-  const { status } = req.body;
+  const { status, fotoEntrega } = req.body;
   if (!status || !STATUS_VALIDOS.includes(status)) {
     return res.status(400).json({ error: `Campo "status" é obrigatório e deve ser um de: ${STATUS_VALIDOS.join(', ')}` });
   }
@@ -508,6 +517,7 @@ router.patch('/:id/status', asyncHandler(async (req, res, next) => {
       data: {
         status,
         ...(carimboCampo ? { [carimboCampo]: new Date() } : {}),
+        ...(status === 'ENTREGUE' && typeof fotoEntrega === 'string' && fotoEntrega ? { fotoEntrega } : {}),
       },
       include: { itens: { include: { opcoesSelecionadas: true } }, motoboy: { select: { id: true, nome: true, latitudeAtual: true, longitudeAtual: true, localizacaoAtualizadaEm: true } } },
     });
@@ -836,10 +846,13 @@ router.post('/pagar-motoboy', requireEmpresaAdmin(), asyncHandler(async (req, re
  *         description: Pedido não encontrado
  */
 router.post('/:id/avaliar-pedido', requireCliente(), asyncHandler(async (req, res) => {
-  const { nota, comentario } = req.body;
+  const { nota, comentario, fotos } = req.body;
 
   if (!Number.isInteger(nota) || nota < 1 || nota > 5) {
     return res.status(400).json({ error: 'A nota precisa ser um número inteiro entre 1 e 5' });
+  }
+  if (fotos !== undefined && (!Array.isArray(fotos) || !fotos.every((f) => typeof f === 'string'))) {
+    return res.status(400).json({ error: 'Campo "fotos" deve ser uma lista de URLs' });
   }
 
   const pedido = await prisma.pedido.findFirst({
@@ -860,7 +873,12 @@ router.post('/:id/avaliar-pedido', requireCliente(), asyncHandler(async (req, re
 
   const atualizado = await prisma.pedido.update({
     where: { id: pedido.id },
-    data: { notaPedido: nota, comentarioPedido: comentario || null, avaliadoEm: new Date() },
+    data: {
+      notaPedido: nota,
+      comentarioPedido: comentario || null,
+      fotosAvaliacao: Array.isArray(fotos) ? fotos.slice(0, 5) : [],
+      avaliadoEm: new Date(),
+    },
     include: { itens: { include: { opcoesSelecionadas: true } }, motoboy: { select: { id: true, nome: true, latitudeAtual: true, longitudeAtual: true, localizacaoAtualizadaEm: true } } },
   });
 

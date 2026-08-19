@@ -128,6 +128,56 @@ router.get('/resumo', asyncHandler(async (req, res) => {
   });
   const porStatus = porStatusRaw.map((s) => ({ status: s.status, quantidade: s._count._all }));
 
+  // Top bairros por volume de pedidos entregues — ajuda a enxergar onde a demanda se concentra.
+  const porBairroMap = new Map();
+  for (const p of entregues) {
+    const bairro = p.bairro || 'Não informado';
+    const atual = porBairroMap.get(bairro) || { bairro, pedidos: 0, total: 0 };
+    atual.pedidos += 1;
+    atual.total += Number(p.total);
+    porBairroMap.set(bairro, atual);
+  }
+  const porBairro = Array.from(porBairroMap.values()).sort((a, b) => b.pedidos - a.pedidos).slice(0, 10);
+
+  // Pedidos entregues por dia da semana (0=domingo ... 6=sábado).
+  const porDiaSemanaMap = new Map();
+  for (const p of entregues) {
+    const dia = p.createdAt.getDay();
+    porDiaSemanaMap.set(dia, (porDiaSemanaMap.get(dia) || 0) + 1);
+  }
+  const porDiaSemana = Array.from({ length: 7 }, (_, dia) => ({ dia, pedidos: porDiaSemanaMap.get(dia) || 0 }));
+
+  // Novos vs recorrentes: "novo" = a primeira compra ENTREGUE de vida do cliente caiu dentro deste período.
+  const clienteIds = [...new Set(entregues.map((p) => p.clienteId).filter(Boolean))];
+  let novos = 0;
+  let recorrentes = 0;
+  if (clienteIds.length > 0) {
+    const primeirasCompras = await prisma.pedido.groupBy({
+      by: ['clienteId'],
+      where: { empresaId: req.params.empresaId, status: 'ENTREGUE', clienteId: { in: clienteIds } },
+      _min: { createdAt: true },
+    });
+    const primeiraCompraPorCliente = new Map(primeirasCompras.map((c) => [c.clienteId, c._min.createdAt]));
+    for (const clienteId of clienteIds) {
+      const primeira = primeiraCompraPorCliente.get(clienteId);
+      const ehNovo = primeira && primeira >= range.gte && (!range.lte || primeira <= range.lte);
+      if (ehNovo) novos += 1;
+      else recorrentes += 1;
+    }
+  }
+  const novosVsRecorrentes = { novos, recorrentes };
+
+  // Cupons usados no período — quantas vezes cada código foi aplicado e o desconto total gerado.
+  const cupomMap = new Map();
+  for (const p of entregues) {
+    if (!p.cupomCodigo) continue;
+    const atual = cupomMap.get(p.cupomCodigo) || { codigo: p.cupomCodigo, usos: 0, descontoTotal: 0 };
+    atual.usos += 1;
+    atual.descontoTotal += Number(p.descontoCupom ?? 0);
+    cupomMap.set(p.cupomCodigo, atual);
+  }
+  const cuponsUsados = Array.from(cupomMap.values()).sort((a, b) => b.usos - a.usos);
+
   res.json({
     totalRevenue,
     totalUnits,
@@ -144,7 +194,70 @@ router.get('/resumo', asyncHandler(async (req, res) => {
     topProdutos,
     porHora,
     porStatus,
+    porBairro,
+    porDiaSemana,
+    novosVsRecorrentes,
+    cuponsUsados,
   });
+}));
+
+/** Escapa um campo pra CSV: envolve em aspas se tiver vírgula/aspas/quebra de linha, e duplica aspas internas. */
+const csvField = (value) => {
+  const str = String(value ?? '');
+  if (/[",\n]/.test(str)) return `"${str.replace(/"/g, '""')}"`;
+  return str;
+};
+
+/**
+ * @openapi
+ * /empresas/{empresaId}/crm/exportar-csv:
+ *   get:
+ *     summary: Exporta os pedidos entregues do período em CSV, pronto pra abrir em Excel/Planilhas
+ *     tags: [CRM]
+ *     parameters:
+ *       - in: path
+ *         name: empresaId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *       - in: query
+ *         name: de
+ *         schema: { type: string, format: date }
+ *       - in: query
+ *         name: ate
+ *         schema: { type: string, format: date }
+ *     responses:
+ *       200:
+ *         description: Arquivo CSV
+ */
+router.get('/exportar-csv', asyncHandler(async (req, res) => {
+  const { de, ate } = req.query;
+  const range = { gte: dataInicio(de), lte: dataFim(ate) };
+
+  const pedidos = await prisma.pedido.findMany({
+    where: { empresaId: req.params.empresaId, status: 'ENTREGUE', createdAt: range },
+    orderBy: { createdAt: 'asc' },
+  });
+
+  const cabecalho = ['Número', 'Data', 'Cliente', 'Telefone', 'Bairro', 'Forma de pagamento', 'Cupom', 'Subtotal', 'Taxa de entrega', 'Total', 'Nota'];
+  const linhas = pedidos.map((p) => [
+    p.numero,
+    p.createdAt.toLocaleString('pt-BR'),
+    p.clienteNome,
+    p.clienteTelefone,
+    p.bairro || '',
+    p.formaPagamento,
+    p.cupomCodigo || '',
+    Number(p.subtotal).toFixed(2),
+    Number(p.taxaEntrega).toFixed(2),
+    Number(p.total).toFixed(2),
+    p.notaPedido ?? '',
+  ]);
+
+  const csv = [cabecalho, ...linhas].map((linha) => linha.map(csvField).join(',')).join('\r\n');
+
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="pedidos-${de || 'inicio'}-a-${ate || 'hoje'}.csv"`);
+  res.send(`﻿${csv}`);
 }));
 
 module.exports = router;

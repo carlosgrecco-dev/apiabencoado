@@ -104,7 +104,7 @@ router.post('/login', asyncHandler(async (req, res) => {
   }
 
   const token = signToken({ role: 'MOTOBOY', empresaId: req.params.empresaId, motoboyId: motoboy.id }, MOTOBOY_TOKEN_TTL);
-  res.json({ id: motoboy.id, nome: motoboy.nome, token });
+  res.json({ id: motoboy.id, nome: motoboy.nome, disponivel: motoboy.disponivel, token });
 }));
 
 /**
@@ -422,6 +422,57 @@ router.patch('/:id/localizacao', requireMotoboy('id'), asyncHandler(async (req, 
   const motoboy = await prisma.motoboy.update({
     where: { id: req.params.id },
     data: { latitudeAtual: lat, longitudeAtual: lng, localizacaoAtualizadaEm: new Date() },
+  });
+
+  res.json(serializeMotoboy(motoboy));
+}));
+
+/**
+ * @openapi
+ * /empresas/{empresaId}/motoboys/{id}/disponibilidade:
+ *   patch:
+ *     summary: O próprio motoboy liga/desliga o status "disponível pra corrida" no portal dele
+ *     tags: [Motoboys]
+ *     parameters:
+ *       - in: path
+ *         name: empresaId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [disponivel]
+ *             properties:
+ *               disponivel: { type: boolean }
+ *     responses:
+ *       200:
+ *         description: Disponibilidade atualizada
+ *       404:
+ *         description: Motoboy não encontrado
+ */
+router.patch('/:id/disponibilidade', requireMotoboy('id'), asyncHandler(async (req, res) => {
+  const { disponivel } = req.body;
+  if (typeof disponivel !== 'boolean') {
+    return res.status(400).json({ error: 'Campo "disponivel" é obrigatório e deve ser booleano' });
+  }
+
+  const existente = await prisma.motoboy.findFirst({
+    where: { id: req.params.id, empresaId: req.params.empresaId },
+  });
+  if (!existente) {
+    return res.status(404).json({ error: 'Motoboy não encontrado' });
+  }
+
+  const motoboy = await prisma.motoboy.update({
+    where: { id: req.params.id },
+    data: { disponivel },
   });
 
   res.json(serializeMotoboy(motoboy));

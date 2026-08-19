@@ -52,11 +52,11 @@ const upload = multer({
  *         description: Arquivo inválido
  */
 /** Não tem :empresaId na URL (o upload é usado antes de se saber o destino final da imagem) —
- * aceita qualquer um dos dois papéis autenticados que fazem upload hoje: admin de alguma loja
- * ou Super Admin. A leitura estática de /uploads/* continua pública (imagem precisa carregar
- * na loja sem login). */
+ * aceita qualquer papel autenticado que faz upload hoje: admin de alguma loja, Super Admin,
+ * cliente (foto na avaliação do pedido) ou motoboy (foto de comprovante na entrega). A leitura
+ * estática de /uploads/* continua pública (imagem precisa carregar na loja sem login). */
 router.post('/', (req, res, next) => {
-  if (!req.auth || !['EMPRESA_ADMIN', 'SUPER_ADMIN'].includes(req.auth.role)) {
+  if (!req.auth || !['EMPRESA_ADMIN', 'SUPER_ADMIN', 'CLIENTE', 'MOTOBOY'].includes(req.auth.role)) {
     return res.status(401).json({ error: 'Não autenticado' });
   }
   next();
