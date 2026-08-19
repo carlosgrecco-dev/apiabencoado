@@ -31,6 +31,8 @@ const uploadRouter = require('./routes/upload');
 const pushSubscriptionsRouter = require('./routes/pushSubscriptions');
 const favoritosRouter = require('./routes/favoritos');
 const notificacoesRouter = require('./routes/notificacoes');
+const missoesRouter = require('./routes/missoes');
+const ticketsRouter = require('./routes/tickets');
 const serializeDecimals = require('./lib/serializeDecimals');
 const { registrarLog } = require('./lib/auditLog');
 
@@ -122,6 +124,8 @@ app.use('/empresas/:empresaId/cupons', cuponsRouter);
 app.use('/empresas/:empresaId/clientes/:clienteId/enderecos', enderecosRouter);
 app.use('/empresas/:empresaId/clientes/:clienteId/favoritos', favoritosRouter);
 app.use('/empresas/:empresaId/clientes/:clienteId/notificacoes', notificacoesRouter);
+app.use('/empresas/:empresaId/missoes', missoesRouter);
+app.use('/empresas/:empresaId/tickets', ticketsRouter);
 app.use('/empresas/:empresaId/horarios', horariosRouter);
 app.use('/empresas/:empresaId/zonas-entrega', zonasEntregaRouter);
 app.use('/empresas/:empresaId/frete', freteRouter);

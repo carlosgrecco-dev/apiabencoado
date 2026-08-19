@@ -45,6 +45,18 @@ model Empresa {
   /// Se true, o card "Comissão da plataforma" fica oculto no CRM do próprio tenant. Controlado só pelo Super Admin.
   ocultarComissaoTenant Boolean @default(false) @map("ocultar_comissao_tenant")
 
+  // Indicação de lojas: cada tenant tem um código próprio pra indicar outros donos de loja pra
+  // plataforma. Só o Super Admin cria empresas novas (não há autoatendimento) — o campo
+  // "indicado por" é preenchido por ele no cadastro. Quando a fatura do indicado é paga pela
+  // 1ª vez, o indicador ganha crédito (ConfiguracaoPlataforma.recompensaIndicacaoEmpresaValor),
+  // aplicado automaticamente como desconto na próxima fatura gerada pra ele.
+  codigoIndicacao               String?  @unique @map("codigo_indicacao")
+  indicadaPorEmpresaId          String?  @map("indicada_por_empresa_id") @db.Uuid
+  indicadaPor                   Empresa? @relation("IndicacoesEmpresa", fields: [indicadaPorEmpresaId], references: [id], onDelete: SetNull)
+  indicadas                     Empresa[] @relation("IndicacoesEmpresa")
+  indicacaoEmpresaRecompensada  Boolean  @default(false) @map("indicacao_empresa_recompensada")
+  creditoIndicacaoEmpresa       Decimal  @default(0) @map("credito_indicacao_empresa") @db.Decimal(10, 2)
+
   /// Texto livre (institucional) — se vazio, o front usa um modelo padrão de LGPD com os dados da empresa.
   termosConteudo String? @map("termos_conteudo")
 
@@ -70,6 +82,13 @@ model Empresa {
   habilitarAgendamento         Boolean @default(false) @map("habilitar_agendamento")
   habilitarAvaliacaoComFotos   Boolean @default(false) @map("habilitar_avaliacao_com_fotos")
   habilitarNotificacoesInApp   Boolean @default(false) @map("habilitar_notificacoes_in_app")
+  habilitarMissoes             Boolean @default(false) @map("habilitar_missoes")
+  habilitarIndicacaoAvancada   Boolean @default(false) @map("habilitar_indicacao_avancada")
+  habilitarAvaliacaoDetalhada  Boolean @default(false) @map("habilitar_avaliacao_detalhada")
+  habilitarCentralSuporte      Boolean @default(false) @map("habilitar_central_suporte")
+
+  /// Unidades de fidelidade por indicação concluída — só usado quando habilitarIndicacaoAvancada=true (senão usa o padrão fixo de 3).
+  indicacaoRecompensaUnidades Int @default(3) @map("indicacao_recompensa_unidades")
 
   // Configurações operacionais
   lojaAbertaManual      Boolean @default(true) @map("loja_aberta_manual") // botão de emergência "Loja Aberta/Fechada"
@@ -96,6 +115,8 @@ model Empresa {
   zonasEntrega      ZonaEntrega[]
   faturas           Fatura[]
   categorias        Categoria[]
+  missoes           Missao[]
+  ticketsSuporte    TicketSuporte[]
 
   planoId String? @map("plano_id") @db.Uuid
   plano   Plano?  @relation(fields: [planoId], references: [id], onDelete: SetNull)
@@ -151,6 +172,8 @@ model Fatura {
   valorComissao   Decimal      @map("valor_comissao") @db.Decimal(10, 2)
   valorPlano      Decimal      @default(0) @map("valor_plano") @db.Decimal(10, 2)
   valorTotal      Decimal      @map("valor_total") @db.Decimal(10, 2)
+  /// Crédito de indicação de loja abatido nesta fatura (Empresa.creditoIndicacaoEmpresa), já refletido no valorTotal acima.
+  creditoIndicacaoAplicado Decimal? @map("credito_indicacao_aplicado") @db.Decimal(10, 2)
   status          StatusFatura @default(PENDENTE)
   vencimento      DateTime     @db.Date
   pagoEm          DateTime?    @map("pago_em")
@@ -193,6 +216,8 @@ model ConfiguracaoPlataforma {
   endereco             String?
   termosPadraoLojistas String?  @map("termos_padrao_lojistas")
   chavesGlobais        Json?    @map("chaves_globais")
+  /// Crédito em R$ dado a um tenant quando uma loja indicada por ele paga a 1ª fatura. 0 = programa desativado.
+  recompensaIndicacaoEmpresaValor Decimal @default(0) @map("recompensa_indicacao_empresa_valor") @db.Decimal(10, 2)
   updatedAt            DateTime @updatedAt @map("updated_at")
 
   @@map("configuracoes_plataforma")
@@ -261,6 +286,8 @@ model Cliente {
   indicadoPor           Cliente?  @relation("Indicacoes", fields: [indicadoPorId], references: [id], onDelete: SetNull)
   indicados             Cliente[] @relation("Indicacoes")
   indicacaoRecompensada Boolean   @default(false) @map("indicacao_recompensada")
+  /// Total de indicações concluídas por este cliente (como indicador) — só cresce quando Empresa.habilitarIndicacaoAvancada=true. Usado pra liberar bônus de marco (3/10/25).
+  indicacoesConcluidas  Int       @default(0) @map("indicacoes_concluidas")
 
   /// Saldo de cashback em R$, creditado (Empresa.cashbackPercent sobre o subtotal) quando um pedido é ENTREGUE, e debitado quando usado como desconto num pedido futuro.
   saldoCashback Decimal @default(0) @map("saldo_cashback") @db.Decimal(10, 2)
@@ -273,6 +300,8 @@ model Cliente {
   favoritos       Favorito[]
   cuponsRecebidos Cupom[]
   notificacoes    NotificacaoCliente[]
+  missoes         MissaoCliente[]
+  ticketsSuporte  TicketSuporte[]
 
   @@unique([empresaId, email])
   @@unique([empresaId, codigoIndicacao])
@@ -571,6 +600,10 @@ model Pedido {
   comentarioPedido  String?   @map("comentario_pedido")
   /// URLs das fotos anexadas pelo cliente na avaliação (upload usa a mesma rota /uploads já existente).
   fotosAvaliacao    String[]  @default([]) @map("fotos_avaliacao")
+  /// Notas por dimensão (1-5) — só coletadas quando Empresa.habilitarAvaliacaoDetalhada=true, além da notaPedido geral.
+  notaComida        Int?      @map("nota_comida")
+  notaEmbalagem     Int?      @map("nota_embalagem")
+  notaTempo         Int?      @map("nota_tempo")
   avaliadoEm        DateTime? @map("avaliado_em")
   notaMotoboy       Int?      @map("nota_motoboy")
   comentarioMotoboy String?   @map("comentario_motoboy")
@@ -584,6 +617,7 @@ model Pedido {
 
   itens             PedidoItem[]
   pushSubscriptions PushSubscription[]
+  ticketsSuporte    TicketSuporte[]
 
   @@unique([empresaId, numero])
   @@map("pedidos")
@@ -616,6 +650,69 @@ model NotificacaoCliente {
   createdAt DateTime @default(now()) @map("created_at")
 
   @@map("notificacoes_cliente")
+}
+
+/// Missão de fidelidade configurada pela loja (ex: "Peça 3x essa semana e ganhe 5 unidades").
+/// O cliente aceita a missão (cria um MissaoCliente) e ela é avaliada nos pedidos ENTREGUES a
+/// partir do momento em que foi aceita, dentro da janela de periodoDias.
+model Missao {
+  id                 String   @id @default(uuid()) @db.Uuid
+  empresaId          String   @map("empresa_id") @db.Uuid
+  empresa            Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  titulo             String
+  descricao          String?
+  metaPedidos        Int      @map("meta_pedidos")
+  periodoDias        Int      @map("periodo_dias")
+  recompensaUnidades Int      @map("recompensa_unidades")
+  ativo              Boolean  @default(true)
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  participacoes MissaoCliente[]
+
+  @@map("missoes")
+}
+
+/// Participação de um cliente numa missão — 1 tentativa ativa por vez (reaceitar depois de
+/// concluir ou expirar cria uma nova linha, não reaproveita esta).
+model MissaoCliente {
+  id           String    @id @default(uuid()) @db.Uuid
+  missaoId     String    @map("missao_id") @db.Uuid
+  missao       Missao    @relation(fields: [missaoId], references: [id], onDelete: Cascade)
+  clienteId    String    @map("cliente_id") @db.Uuid
+  cliente      Cliente   @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  iniciadaEm   DateTime  @default(now()) @map("iniciada_em")
+  concluidaEm  DateTime? @map("concluida_em")
+  recompensada Boolean   @default(false)
+
+  @@map("missoes_clientes")
+}
+
+enum StatusTicketSuporte {
+  ABERTO
+  EM_ANDAMENTO
+  RESOLVIDO
+}
+
+/// Central de suporte: cliente relata um problema (opcionalmente ligado a um pedido), admin
+/// responde e resolve. Gera notificação in-app pro cliente quando o admin responde/resolve
+/// (se Empresa.habilitarNotificacoesInApp também estiver ligado).
+model TicketSuporte {
+  id            String              @id @default(uuid()) @db.Uuid
+  empresaId     String              @map("empresa_id") @db.Uuid
+  empresa       Empresa             @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  pedidoId      String?             @map("pedido_id") @db.Uuid
+  pedido        Pedido?             @relation(fields: [pedidoId], references: [id], onDelete: SetNull)
+  clienteId     String              @map("cliente_id") @db.Uuid
+  cliente       Cliente             @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  assunto       String
+  mensagem      String
+  status        StatusTicketSuporte @default(ABERTO)
+  respostaAdmin String?             @map("resposta_admin")
+  createdAt     DateTime            @default(now()) @map("created_at")
+  updatedAt     DateTime            @updatedAt @map("updated_at")
+
+  @@map("tickets_suporte")
 }
 
 model PedidoItem {

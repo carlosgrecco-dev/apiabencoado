@@ -51,6 +51,17 @@ router.get('/resumo', asyncHandler(async (req, res) => {
   const avaliados = entregues.filter((p) => p.notaPedido != null);
   const avgRating = avaliados.length > 0 ? avaliados.reduce((s, p) => s + p.notaPedido, 0) / avaliados.length : 0;
 
+  // Médias por dimensão — só existem valores quando Empresa.habilitarAvaliacaoDetalhada esteve ligado no momento da avaliação.
+  const mediaPorDimensao = (campo) => {
+    const notas = entregues.map((p) => p[campo]).filter((n) => n != null);
+    return notas.length > 0 ? { media: notas.reduce((s, n) => s + n, 0) / notas.length, quantidade: notas.length } : null;
+  };
+  const avaliacaoDetalhada = {
+    comida: mediaPorDimensao('notaComida'),
+    embalagem: mediaPorDimensao('notaEmbalagem'),
+    tempo: mediaPorDimensao('notaTempo'),
+  };
+
   const byPaymentMap = new Map();
   for (const p of entregues) {
     byPaymentMap.set(p.formaPagamento, (byPaymentMap.get(p.formaPagamento) || 0) + Number(p.total));
@@ -198,6 +209,7 @@ router.get('/resumo', asyncHandler(async (req, res) => {
     porDiaSemana,
     novosVsRecorrentes,
     cuponsUsados,
+    avaliacaoDetalhada,
   });
 }));
 

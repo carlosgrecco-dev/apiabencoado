@@ -19,7 +19,9 @@ const comAtraso = (fatura) => ({
 
 /**
  * Calcula o total vendido (pedidos ENTREGUES) de uma empresa num período e monta os valores da fatura,
- * usando a comissão e o plano vigentes da empresa no momento da geração (snapshot).
+ * usando a comissão e o plano vigentes da empresa no momento da geração (snapshot). Se a empresa tem
+ * saldo de crédito por indicação de outra loja (Empresa.creditoIndicacaoEmpresa), aplica automaticamente
+ * como desconto — limitado ao valor total da fatura, nunca deixando ficar negativa.
  */
 const montarFatura = async (empresa, periodoInicio, periodoFim) => {
   const agregado = await prisma.pedido.aggregate({
@@ -35,9 +37,16 @@ const montarFatura = async (empresa, periodoInicio, periodoFim) => {
   const comissaoPercent = Number(empresa.comissaoPercent);
   const valorComissao = Math.round(valorVendas * (comissaoPercent / 100) * 100) / 100;
   const valorPlano = empresa.plano ? Number(empresa.plano.valorMensal) : 0;
-  const valorTotal = valorComissao + valorPlano;
+  const valorBruto = valorComissao + valorPlano;
 
-  return { valorVendas, comissaoPercent, valorComissao, valorPlano, valorTotal };
+  const saldoCredito = Number(empresa.creditoIndicacaoEmpresa || 0);
+  const creditoIndicacaoAplicado = saldoCredito > 0 ? Math.min(saldoCredito, valorBruto) : 0;
+  const valorTotal = valorBruto - creditoIndicacaoAplicado;
+
+  return {
+    valorVendas, comissaoPercent, valorComissao, valorPlano, valorTotal,
+    creditoIndicacaoAplicado: creditoIndicacaoAplicado > 0 ? creditoIndicacaoAplicado : null,
+  };
 };
 
 /**
@@ -118,15 +127,24 @@ router.post('/gerar', asyncHandler(async (req, res) => {
   const valores = await montarFatura(empresa, periodoInicio, periodoFim);
 
   try {
-    const fatura = await prisma.fatura.create({
-      data: {
-        empresaId,
-        periodoInicio: new Date(`${periodoInicio}T00:00:00`),
-        periodoFim: new Date(`${periodoFim}T00:00:00`),
-        vencimento: new Date(`${vencimento}T00:00:00`),
-        ...valores,
-      },
-      include: { empresa: { select: { id: true, nome: true, slug: true } } },
+    const fatura = await prisma.$transaction(async (tx) => {
+      const criada = await tx.fatura.create({
+        data: {
+          empresaId,
+          periodoInicio: new Date(`${periodoInicio}T00:00:00`),
+          periodoFim: new Date(`${periodoFim}T00:00:00`),
+          vencimento: new Date(`${vencimento}T00:00:00`),
+          ...valores,
+        },
+        include: { empresa: { select: { id: true, nome: true, slug: true } } },
+      });
+      if (valores.creditoIndicacaoAplicado) {
+        await tx.empresa.update({
+          where: { id: empresaId },
+          data: { creditoIndicacaoEmpresa: { decrement: valores.creditoIndicacaoAplicado } },
+        });
+      }
+      return criada;
     });
     await registrarLog({
       tipo: 'ALTERACAO_CRITICA', empresaId: empresa.id, empresaNome: empresa.nome, ator: 'super-admin',
@@ -175,14 +193,23 @@ router.post('/gerar-lote', asyncHandler(async (req, res) => {
   for (const empresa of empresas) {
     const valores = await montarFatura(empresa, periodoInicio, periodoFim);
     try {
-      const fatura = await prisma.fatura.create({
-        data: {
-          empresaId: empresa.id,
-          periodoInicio: new Date(`${periodoInicio}T00:00:00`),
-          periodoFim: new Date(`${periodoFim}T00:00:00`),
-          vencimento: new Date(`${vencimento}T00:00:00`),
-          ...valores,
-        },
+      const fatura = await prisma.$transaction(async (tx) => {
+        const criada = await tx.fatura.create({
+          data: {
+            empresaId: empresa.id,
+            periodoInicio: new Date(`${periodoInicio}T00:00:00`),
+            periodoFim: new Date(`${periodoFim}T00:00:00`),
+            vencimento: new Date(`${vencimento}T00:00:00`),
+            ...valores,
+          },
+        });
+        if (valores.creditoIndicacaoAplicado) {
+          await tx.empresa.update({
+            where: { id: empresa.id },
+            data: { creditoIndicacaoEmpresa: { decrement: valores.creditoIndicacaoAplicado } },
+          });
+        }
+        return criada;
       });
       geradas.push(fatura.id);
     } catch (error) {
@@ -234,15 +261,41 @@ router.patch('/:id/status', asyncHandler(async (req, res) => {
     return res.status(400).json({ error: `Campo "status" é obrigatório e deve ser um de: ${STATUS_VALIDOS.join(', ')}` });
   }
 
-  const fatura = await prisma.fatura.findUnique({ where: { id: req.params.id }, include: { empresa: { select: { nome: true } } } });
+  const fatura = await prisma.fatura.findUnique({
+    where: { id: req.params.id },
+    include: { empresa: { select: { id: true, nome: true, indicadaPorEmpresaId: true, indicacaoEmpresaRecompensada: true } } },
+  });
   if (!fatura) {
     return res.status(404).json({ error: 'Fatura não encontrada' });
   }
 
-  const atualizada = await prisma.fatura.update({
-    where: { id: req.params.id },
-    data: { status, pagoEm: status === 'PAGO' ? new Date() : null },
-    include: { empresa: { select: { id: true, nome: true, slug: true } } },
+  const atualizada = await prisma.$transaction(async (tx) => {
+    const salva = await tx.fatura.update({
+      where: { id: req.params.id },
+      data: { status, pagoEm: status === 'PAGO' ? new Date() : null },
+      include: { empresa: { select: { id: true, nome: true, slug: true } } },
+    });
+
+    // Indicação de loja: se esta é a 1ª fatura paga da empresa e ela foi indicada por outra,
+    // credita a loja indicadora — uma única vez (indicacaoEmpresaRecompensada trava).
+    if (status === 'PAGO' && fatura.empresa.indicadaPorEmpresaId && !fatura.empresa.indicacaoEmpresaRecompensada) {
+      const faturasPagasAnteriores = await tx.fatura.count({
+        where: { empresaId: fatura.empresaId, status: 'PAGO', id: { not: fatura.id } },
+      });
+      if (faturasPagasAnteriores === 0) {
+        const config = await tx.configuracaoPlataforma.findFirst();
+        const recompensa = Number(config?.recompensaIndicacaoEmpresaValor || 0);
+        if (recompensa > 0) {
+          await tx.empresa.update({
+            where: { id: fatura.empresa.indicadaPorEmpresaId },
+            data: { creditoIndicacaoEmpresa: { increment: recompensa } },
+          });
+        }
+        await tx.empresa.update({ where: { id: fatura.empresaId }, data: { indicacaoEmpresaRecompensada: true } });
+      }
+    }
+
+    return salva;
   });
 
   await registrarLog({

@@ -5,7 +5,7 @@ const validarCupom = require('../lib/validarCupom');
 const { calcularStatusLoja } = require('../lib/statusLoja');
 const { calcularFrete } = require('../lib/calcularFrete');
 const { disponibilidadeFidelidade, creditarUnidadesFidelidade } = require('../lib/fidelidade');
-const { RECOMPENSA_INDICACAO_UNIDADES } = require('../lib/indicacao');
+const { RECOMPENSA_INDICACAO_UNIDADES, bonusPorMarco } = require('../lib/indicacao');
 const { creditarCashback } = require('../lib/cashback');
 const { notificarPedido } = require('../lib/pushNotifications');
 const { criarNotificacaoCliente } = require('../lib/notificacoesCliente');
@@ -597,9 +597,47 @@ router.patch('/:id/status', asyncHandler(async (req, res, next) => {
             where: { clienteId: cliente.id, status: 'ENTREGUE', id: { not: salvo.id } },
           });
           if (pedidosAnterioresEntregues === 0) {
-            await creditarUnidadesFidelidade(tx, cliente.id, RECOMPENSA_INDICACAO_UNIDADES);
-            await creditarUnidadesFidelidade(tx, cliente.indicadoPorId, RECOMPENSA_INDICACAO_UNIDADES);
+            const recompensaIndicacao = req.empresa.habilitarIndicacaoAvancada
+              ? req.empresa.indicacaoRecompensaUnidades
+              : RECOMPENSA_INDICACAO_UNIDADES;
+            await creditarUnidadesFidelidade(tx, cliente.id, recompensaIndicacao);
+            await creditarUnidadesFidelidade(tx, cliente.indicadoPorId, recompensaIndicacao);
             await tx.cliente.update({ where: { id: cliente.id }, data: { indicacaoRecompensada: true } });
+
+            // Modo avançado: acumula o total de indicações concluídas do indicador e libera
+            // bônus de marco (3/10/25) quando bate exatamente numa dessas metas.
+            if (req.empresa.habilitarIndicacaoAvancada) {
+              const indicador = await tx.cliente.update({
+                where: { id: cliente.indicadoPorId },
+                data: { indicacoesConcluidas: { increment: 1 } },
+              });
+              const bonus = bonusPorMarco(indicador.indicacoesConcluidas);
+              if (bonus) {
+                await creditarUnidadesFidelidade(tx, indicador.id, bonus);
+              }
+            }
+          }
+        }
+      }
+
+      // Missões de fidelidade: avalia as participações ativas do cliente e credita quem bateu a meta.
+      if (salvo.clienteId && req.empresa.habilitarMissoes) {
+        const participacoesAtivas = await tx.missaoCliente.findMany({
+          where: { clienteId: salvo.clienteId, concluidaEm: null },
+          include: { missao: true },
+        });
+        for (const participacao of participacoesAtivas) {
+          const expiraEm = new Date(participacao.iniciadaEm).getTime() + participacao.missao.periodoDias * 86400000;
+          if (Date.now() > expiraEm) continue;
+          const pedidosCount = await tx.pedido.count({
+            where: { clienteId: salvo.clienteId, status: 'ENTREGUE', createdAt: { gte: participacao.iniciadaEm } },
+          });
+          if (pedidosCount >= participacao.missao.metaPedidos) {
+            await creditarUnidadesFidelidade(tx, salvo.clienteId, participacao.missao.recompensaUnidades);
+            await tx.missaoCliente.update({
+              where: { id: participacao.id },
+              data: { concluidaEm: new Date(), recompensada: true },
+            });
           }
         }
       }
@@ -898,7 +936,7 @@ router.post('/pagar-motoboy', requireEmpresaAdmin(), asyncHandler(async (req, re
  *         description: Pedido não encontrado
  */
 router.post('/:id/avaliar-pedido', requireCliente(), asyncHandler(async (req, res) => {
-  const { nota, comentario, fotos } = req.body;
+  const { nota, comentario, fotos, notaComida, notaEmbalagem, notaTempo } = req.body;
 
   if (!Number.isInteger(nota) || nota < 1 || nota > 5) {
     return res.status(400).json({ error: 'A nota precisa ser um número inteiro entre 1 e 5' });
@@ -908,6 +946,16 @@ router.post('/:id/avaliar-pedido', requireCliente(), asyncHandler(async (req, re
   }
   if (Array.isArray(fotos) && fotos.length > 0 && !req.empresa.habilitarAvaliacaoComFotos) {
     return res.status(400).json({ error: 'Esta loja não habilitou fotos na avaliação' });
+  }
+  const notasDetalhadas = { notaComida, notaEmbalagem, notaTempo };
+  for (const [campo, valor] of Object.entries(notasDetalhadas)) {
+    if (valor !== undefined && (!Number.isInteger(valor) || valor < 1 || valor > 5)) {
+      return res.status(400).json({ error: `Campo "${campo}" deve ser um número inteiro entre 1 e 5` });
+    }
+  }
+  const temNotaDetalhada = Object.values(notasDetalhadas).some((v) => v !== undefined);
+  if (temNotaDetalhada && !req.empresa.habilitarAvaliacaoDetalhada) {
+    return res.status(400).json({ error: 'Esta loja não habilitou a avaliação detalhada' });
   }
 
   const pedido = await prisma.pedido.findFirst({
@@ -932,6 +980,9 @@ router.post('/:id/avaliar-pedido', requireCliente(), asyncHandler(async (req, re
       notaPedido: nota,
       comentarioPedido: comentario || null,
       fotosAvaliacao: Array.isArray(fotos) ? fotos.slice(0, 5) : [],
+      ...(notaComida !== undefined ? { notaComida } : {}),
+      ...(notaEmbalagem !== undefined ? { notaEmbalagem } : {}),
+      ...(notaTempo !== undefined ? { notaTempo } : {}),
       avaliadoEm: new Date(),
     },
     include: { itens: { include: { opcoesSelecionadas: true } }, motoboy: { select: { id: true, nome: true, latitudeAtual: true, longitudeAtual: true, localizacaoAtualizadaEm: true } } },

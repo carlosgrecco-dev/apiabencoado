@@ -4,6 +4,7 @@ const prisma = require('../lib/prisma');
 const { calcularStatusLoja } = require('../lib/statusLoja');
 const { registrarLog } = require('../lib/auditLog');
 const { signToken, requireSuperAdmin, requireEmpresaAdmin } = require('../lib/auth');
+const { gerarCodigoIndicacaoEmpresaUnico } = require('../lib/indicacaoEmpresa');
 
 const ADMIN_TOKEN_TTL = '12h';
 
@@ -199,6 +200,7 @@ router.get('/', requireSuperAdmin, asyncHandler(async (req, res) => {
 
   const empresas = await prisma.empresa.findMany({
     where,
+    include: { indicadaPor: { select: { id: true, nome: true, codigoIndicacao: true } } },
     orderBy: { createdAt: 'desc' },
   });
 
@@ -439,6 +441,11 @@ router.get('/slug/:slug', asyncHandler(async (req, res) => {
       habilitarAgendamento: true,
       habilitarAvaliacaoComFotos: true,
       habilitarNotificacoesInApp: true,
+      habilitarMissoes: true,
+      habilitarIndicacaoAvancada: true,
+      habilitarAvaliacaoDetalhada: true,
+      habilitarCentralSuporte: true,
+      indicacaoRecompensaUnidades: true,
       lojaAbertaManual: true,
       usarHorarioAutomatico: true,
       tempoEstimadoMin: true,
@@ -482,10 +489,18 @@ router.get('/slug/:slug', asyncHandler(async (req, res) => {
  *         description: Empresa não encontrada
  */
 router.get('/:id', requireEmpresaAdmin('id'), asyncHandler(async (req, res) => {
-  const empresa = await prisma.empresa.findUnique({ where: { id: req.params.id } });
+  let empresa = await prisma.empresa.findUnique({ where: { id: req.params.id } });
 
   if (!empresa) {
     return res.status(404).json({ error: 'Empresa não encontrada' });
+  }
+
+  // Empresas cadastradas antes do sistema de indicação de lojas existir não têm código — gera na primeira vez que aparece.
+  if (!empresa.codigoIndicacao) {
+    empresa = await prisma.empresa.update({
+      where: { id: empresa.id },
+      data: { codigoIndicacao: await gerarCodigoIndicacaoEmpresaUnico() },
+    });
   }
 
   res.json(serializeEmpresa(empresa));
@@ -518,7 +533,7 @@ router.get('/:id', requireEmpresaAdmin('id'), asyncHandler(async (req, res) => {
 router.post('/', requireSuperAdmin, asyncHandler(async (req, res) => {
   const {
     nome, responsavelNome, email, telefone, documento, slug, usuario, senha,
-    empresaAtiva, adminAtivo, planoId, comissaoPercent,
+    empresaAtiva, adminAtivo, planoId, comissaoPercent, indicadoPor,
   } = req.body;
 
   const erros = validarPayload(req.body);
@@ -549,7 +564,15 @@ router.post('/', requireSuperAdmin, asyncHandler(async (req, res) => {
     return res.status(400).json({ error: erros.join('; ') });
   }
 
+  // Código de quem indicou é opcional e silenciosamente ignorado se inválido — mesmo padrão da indicação de cliente.
+  let indicadaPorEmpresaId = null;
+  if (typeof indicadoPor === 'string' && indicadoPor.trim()) {
+    const indicadora = await prisma.empresa.findUnique({ where: { codigoIndicacao: indicadoPor.trim().toUpperCase() } });
+    if (indicadora) indicadaPorEmpresaId = indicadora.id;
+  }
+
   const senhaHash = await bcrypt.hash(senha, SALT_ROUNDS);
+  const codigoIndicacao = await gerarCodigoIndicacaoEmpresaUnico();
 
   try {
     const empresa = await prisma.empresa.create({
@@ -564,6 +587,8 @@ router.post('/', requireSuperAdmin, asyncHandler(async (req, res) => {
         senhaHash,
         empresaAtiva: empresaAtiva ?? true,
         adminAtivo: adminAtivo ?? true,
+        codigoIndicacao,
+        indicadaPorEmpresaId,
         ...(plano
           ? { planoId: plano.id, comissaoPercent: plano.comissaoPercent }
           : comissaoAvulsa !== null ? { comissaoPercent: comissaoAvulsa } : {}),
@@ -1317,6 +1342,7 @@ router.put('/:id/fidelidade-config', requireEmpresaAdmin('id'), asyncHandler(asy
 const CAMPOS_FUNCIONALIDADES = [
   'habilitarFavoritos', 'habilitarPedirDeNovo', 'habilitarRankingFidelidade',
   'habilitarAgendamento', 'habilitarAvaliacaoComFotos', 'habilitarNotificacoesInApp',
+  'habilitarMissoes', 'habilitarIndicacaoAvancada', 'habilitarAvaliacaoDetalhada', 'habilitarCentralSuporte',
 ];
 
 /**
@@ -1342,6 +1368,11 @@ const CAMPOS_FUNCIONALIDADES = [
  *               habilitarAgendamento: { type: boolean }
  *               habilitarAvaliacaoComFotos: { type: boolean }
  *               habilitarNotificacoesInApp: { type: boolean }
+ *               habilitarMissoes: { type: boolean }
+ *               habilitarIndicacaoAvancada: { type: boolean }
+ *               habilitarAvaliacaoDetalhada: { type: boolean }
+ *               habilitarCentralSuporte: { type: boolean }
+ *               indicacaoRecompensaUnidades: { type: integer }
  *     responses:
  *       200:
  *         description: Configuração atualizada
@@ -1359,6 +1390,13 @@ router.put('/:id/funcionalidades-config', requireEmpresaAdmin('id'), asyncHandle
       }
       data[campo] = req.body[campo];
     }
+  }
+  if (req.body.indicacaoRecompensaUnidades !== undefined) {
+    const valor = Number(req.body.indicacaoRecompensaUnidades);
+    if (!Number.isInteger(valor) || valor < 1) {
+      return res.status(400).json({ error: 'Campo "indicacaoRecompensaUnidades" deve ser um inteiro maior que zero' });
+    }
+    data.indicacaoRecompensaUnidades = valor;
   }
 
   try {

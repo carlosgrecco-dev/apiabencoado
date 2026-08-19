@@ -23,7 +23,17 @@ const gerarCodigoIndicacaoUnico = async (empresaId) => {
   throw new Error('Não foi possível gerar um código de indicação único');
 };
 
-/** Unidades de fidelidade creditadas pra cada lado (quem indicou e quem foi indicado) na primeira compra concluída do indicado. */
+/** Unidades de fidelidade creditadas pra cada lado (quem indicou e quem foi indicado) na primeira compra concluída do indicado — usado quando a loja não habilitou o modo avançado (valor fixo, não configurável). */
 const RECOMPENSA_INDICACAO_UNIDADES = 3;
 
-module.exports = { gerarCodigoIndicacaoUnico, RECOMPENSA_INDICACAO_UNIDADES };
+/** Marcos de indicações concluídas (só quem indica) que liberam um bônus extra — só vale com Empresa.habilitarIndicacaoAvancada=true. */
+const MARCOS_INDICACAO = [
+  { meta: 3, bonus: 5 },
+  { meta: 10, bonus: 15 },
+  { meta: 25, bonus: 40 },
+];
+
+/** Se `total` bater exatamente num marco, devolve o bônus daquele marco; senão null. */
+const bonusPorMarco = (total) => MARCOS_INDICACAO.find((m) => m.meta === total)?.bonus ?? null;
+
+module.exports = { gerarCodigoIndicacaoUnico, RECOMPENSA_INDICACAO_UNIDADES, MARCOS_INDICACAO, bonusPorMarco };

@@ -30,6 +30,7 @@ router.get('/publico', asyncHandler(async (req, res) => {
     nomeEmpresa: config.nomeEmpresa,
     emailSuporte: config.emailSuporte,
     telefoneSuporte: config.telefoneSuporte,
+    recompensaIndicacaoEmpresaValor: config.recompensaIndicacaoEmpresaValor,
   });
 }));
 
@@ -69,12 +70,23 @@ router.get('/', asyncHandler(async (req, res) => {
  *               endereco: { type: string }
  *               termosPadraoLojistas: { type: string }
  *               chavesGlobais: { type: object }
+ *               recompensaIndicacaoEmpresaValor: { type: number }
  *     responses:
  *       200:
  *         description: Configurações atualizadas
  */
 router.put('/', asyncHandler(async (req, res) => {
-  const { nomeEmpresa, documento, emailSuporte, telefoneSuporte, endereco, termosPadraoLojistas, chavesGlobais } = req.body;
+  const {
+    nomeEmpresa, documento, emailSuporte, telefoneSuporte, endereco, termosPadraoLojistas, chavesGlobais,
+    recompensaIndicacaoEmpresaValor,
+  } = req.body;
+
+  if (recompensaIndicacaoEmpresaValor !== undefined && recompensaIndicacaoEmpresaValor !== null) {
+    const valor = Number(recompensaIndicacaoEmpresaValor);
+    if (Number.isNaN(valor) || valor < 0) {
+      return res.status(400).json({ error: 'Campo "recompensaIndicacaoEmpresaValor" deve ser um número maior ou igual a zero' });
+    }
+  }
 
   const atual = await getOuCriar();
 
@@ -88,6 +100,9 @@ router.put('/', asyncHandler(async (req, res) => {
       ...(endereco !== undefined ? { endereco: endereco || null } : {}),
       ...(termosPadraoLojistas !== undefined ? { termosPadraoLojistas: termosPadraoLojistas || null } : {}),
       ...(chavesGlobais !== undefined ? { chavesGlobais } : {}),
+      ...(recompensaIndicacaoEmpresaValor !== undefined
+        ? { recompensaIndicacaoEmpresaValor: recompensaIndicacaoEmpresaValor === null ? 0 : Number(recompensaIndicacaoEmpresaValor) }
+        : {}),
     },
   });
 
