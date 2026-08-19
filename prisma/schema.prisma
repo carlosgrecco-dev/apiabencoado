@@ -18,6 +18,8 @@ model Empresa {
   senhaHash       String   @map("senha_hash")
   empresaAtiva    Boolean  @default(true) @map("empresa_ativa")
   adminAtivo      Boolean  @default(true) @map("admin_ativo")
+  /// Último login do admin do tenant — usado só pro Super Admin enxergar saúde/atividade da loja, não afeta nenhuma regra de acesso.
+  ultimoAcessoAdminEm DateTime? @map("ultimo_acesso_admin_em")
 
   // Perfil da loja (vitrine/admin da empresa)
   descricao             String? // tagline curta, ex: "20 anos de sabor baiano"
@@ -571,6 +573,9 @@ model Pedido {
 
   /// Preenchido só quando o cliente escolhe "agendar" no checkout em vez de "pedir agora" — horário desejado de entrega/retirada.
   agendadoPara DateTime? @map("agendado_para")
+
+  /// User-Agent bruto do navegador no momento do checkout — só usado pro Super Admin ver mix de dispositivo/navegador agregado da plataforma (nunca por pedido/cliente individual).
+  userAgent String? @map("user_agent")
 
   motoboyId          String?  @map("motoboy_id") @db.Uuid
   motoboy            Motoboy? @relation(fields: [motoboyId], references: [id], onDelete: SetNull)

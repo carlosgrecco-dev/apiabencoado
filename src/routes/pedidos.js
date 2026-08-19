@@ -416,6 +416,7 @@ router.post('/', asyncHandler(async (req, res) => {
         trocoPara: trocoPara || null,
         observacoes: observacoes || null,
         agendadoPara: agendadoParaData,
+        userAgent: req.headers['user-agent']?.slice(0, 300) || null,
         clienteId: cliente?.id || null,
         itemGratisResgatado: resgatouItemGratis,
         cupomId: cupomAplicado?.id || null,

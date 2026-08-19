@@ -2,6 +2,7 @@ const { Router } = require('express');
 const bcrypt = require('bcryptjs');
 const prisma = require('../lib/prisma');
 const { signToken, requireSuperAdmin } = require('../lib/auth');
+const { agregarDispositivos } = require('../lib/userAgentStats');
 
 const router = Router();
 
@@ -73,6 +74,20 @@ router.post('/login', asyncHandler(async (req, res) => {
  *       200:
  *         description: Métricas agregadas da plataforma
  */
+/** Toggles opt-in existentes hoje — usados só pra contar quantos tenants ligaram cada um. */
+const FUNCIONALIDADES = [
+  { campo: 'habilitarFavoritos', label: 'Favoritos' },
+  { campo: 'habilitarPedirDeNovo', label: 'Peça de novo' },
+  { campo: 'habilitarRankingFidelidade', label: 'Nível de fidelidade' },
+  { campo: 'habilitarAgendamento', label: 'Agendar pedido' },
+  { campo: 'habilitarAvaliacaoComFotos', label: 'Fotos na avaliação' },
+  { campo: 'habilitarNotificacoesInApp', label: 'Central de notificações' },
+  { campo: 'habilitarMissoes', label: 'Missões de fidelidade' },
+  { campo: 'habilitarIndicacaoAvancada', label: 'Indicação avançada' },
+  { campo: 'habilitarAvaliacaoDetalhada', label: 'Avaliação detalhada' },
+  { campo: 'habilitarCentralSuporte', label: 'Central de suporte' },
+];
+
 router.get('/dashboard', requireSuperAdmin, asyncHandler(async (req, res) => {
   const { de, ate } = req.query;
   const range = {
@@ -80,18 +95,29 @@ router.get('/dashboard', requireSuperAdmin, asyncHandler(async (req, res) => {
     lte: ate ? new Date(`${ate}T23:59:59`) : undefined,
   };
 
-  const [totalEmpresas, empresasAtivas, totalClientes, totalMotoboysAtivos, entregues] = await Promise.all([
+  const [totalEmpresas, empresasAtivas, totalClientes, totalMotoboysAtivos, novosTenantsNoPeriodo, entregues, ultimoPedidoPorEmpresa, empresas] = await Promise.all([
     prisma.empresa.count(),
     prisma.empresa.count({ where: { empresaAtiva: true } }),
     prisma.cliente.count(),
     prisma.motoboy.count({ where: { ativo: true } }),
+    prisma.empresa.count({ where: { createdAt: range } }),
     prisma.pedido.findMany({
       where: { status: 'ENTREGUE', createdAt: range },
-      select: { total: true, empresaId: true },
+      select: { total: true, empresaId: true, createdAt: true, userAgent: true },
+    }),
+    prisma.pedido.groupBy({ by: ['empresaId'], where: { status: 'ENTREGUE' }, _max: { createdAt: true } }),
+    prisma.empresa.findMany({
+      select: {
+        id: true, nome: true, slug: true, empresaAtiva: true, comissaoPercent: true,
+        ultimoAcessoAdminEm: true, createdAt: true, cashbackPercent: true,
+        habilitarFavoritos: true, habilitarPedirDeNovo: true, habilitarRankingFidelidade: true,
+        habilitarAgendamento: true, habilitarAvaliacaoComFotos: true, habilitarNotificacoesInApp: true,
+        habilitarMissoes: true, habilitarIndicacaoAvancada: true, habilitarAvaliacaoDetalhada: true,
+        habilitarCentralSuporte: true,
+      },
     }),
   ]);
 
-  const empresas = await prisma.empresa.findMany({ select: { id: true, comissaoPercent: true } });
   const comissaoPorEmpresa = new Map(empresas.map((e) => [e.id, Number(e.comissaoPercent)]));
 
   const gmv = entregues.reduce((sum, p) => sum + Number(p.total), 0);
@@ -108,10 +134,50 @@ router.get('/dashboard', requireSuperAdmin, asyncHandler(async (req, res) => {
   }
   const lojasComVendaNoPeriodo = porEmpresaMap.size;
 
+  // Tendência de pedidos por dia (plataforma inteira) — mesmo padrão já usado no CRM de cada loja.
+  const porDiaMap = new Map();
+  for (const p of entregues) {
+    const dia = p.createdAt.toISOString().slice(0, 10);
+    porDiaMap.set(dia, (porDiaMap.get(dia) || 0) + 1);
+  }
+  const pedidosPorDia = Array.from(porDiaMap.entries())
+    .map(([data, pedidos]) => ({ data, pedidos }))
+    .sort((a, b) => a.data.localeCompare(b.data));
+
+  // Dispositivo/navegador agregado — a partir do User-Agent salvo em cada pedido do período.
+  const { dispositivos, navegadores } = agregarDispositivos(entregues.map((p) => p.userAgent));
+
+  // Uso de funcionalidades — quantos tenants ligaram cada opt-in (+ cashback, que usa um percentual em vez de boolean).
+  const usoFuncionalidades = FUNCIONALIDADES.map(({ campo, label }) => {
+    const tenantsUsando = empresas.filter((e) => e[campo]).length;
+    return { recurso: label, tenantsUsando, percentual: totalEmpresas > 0 ? Math.round((tenantsUsando / totalEmpresas) * 100) : 0 };
+  });
+  const tenantsComCashback = empresas.filter((e) => Number(e.cashbackPercent || 0) > 0).length;
+  usoFuncionalidades.push({
+    recurso: 'Cashback',
+    tenantsUsando: tenantsComCashback,
+    percentual: totalEmpresas > 0 ? Math.round((tenantsComCashback / totalEmpresas) * 100) : 0,
+  });
+
+  // Saúde por tenant — pedidos no período selecionado, último pedido de todos os tempos, último acesso ao admin.
+  const ultimoPedidoMap = new Map(ultimoPedidoPorEmpresa.map((r) => [r.empresaId, r._max.createdAt]));
+  const porTenant = empresas
+    .map((e) => ({
+      id: e.id,
+      nome: e.nome,
+      slug: e.slug,
+      ativo: e.empresaAtiva,
+      pedidosNoPeriodo: porEmpresaMap.get(e.id) || 0,
+      ultimoPedidoEm: ultimoPedidoMap.get(e.id) || null,
+      ultimoAcessoAdminEm: e.ultimoAcessoAdminEm,
+    }))
+    .sort((a, b) => b.pedidosNoPeriodo - a.pedidosNoPeriodo);
+
   res.json({
     totalEmpresas,
     empresasAtivas,
     empresasInativas: totalEmpresas - empresasAtivas,
+    novosTenantsNoPeriodo,
     lojasComVendaNoPeriodo,
     totalClientes,
     totalMotoboysAtivos,
@@ -119,6 +185,11 @@ router.get('/dashboard', requireSuperAdmin, asyncHandler(async (req, res) => {
     totalPedidos,
     ticketMedio,
     comissaoTotal,
+    pedidosPorDia,
+    dispositivos,
+    navegadores,
+    usoFuncionalidades,
+    porTenant,
   });
 }));
 

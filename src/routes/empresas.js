@@ -305,6 +305,14 @@ router.get('/', requireSuperAdmin, asyncHandler(async (req, res) => {
  *       404:
  *         description: Empresa não encontrada
  */
+/** Nome e ponto de entrada do PWA mudam conforme de onde foi instalado — sem isso, instalar o
+ * atalho de dentro do admin ou do portal do motoboy abria sempre a vitrine da loja ao reabrir. */
+const CONTEXTOS_MANIFEST = {
+  admin: { sufixoNome: ' · Painel', caminho: '/admin' },
+  motoboy: { sufixoNome: ' · Entregas', caminho: '/motoboy' },
+  loja: { sufixoNome: '', caminho: '' },
+};
+
 router.get('/slug/:slug/manifest.json', asyncHandler(async (req, res) => {
   const empresa = await prisma.empresa.findUnique({
     where: { slug: req.params.slug.toLowerCase() },
@@ -318,13 +326,15 @@ router.get('/slug/:slug/manifest.json', asyncHandler(async (req, res) => {
   const frontOrigin = process.env.FRONT_ORIGIN || 'https://saltfood.com.br';
   const slug = req.params.slug.toLowerCase();
   const iconUrl = empresa.logoUrl || `${frontOrigin}/saltfood-icon.png`;
+  const contexto = CONTEXTOS_MANIFEST[req.query.contexto] || CONTEXTOS_MANIFEST.loja;
+  const nome = `${empresa.nome}${contexto.sufixoNome}`;
 
   res.set('Content-Type', 'application/manifest+json');
   res.json({
-    name: empresa.nome,
-    short_name: empresa.nome,
+    name: nome,
+    short_name: nome,
     description: empresa.descricao || `Peça online na ${empresa.nome}, com entrega rápida.`,
-    start_url: `${frontOrigin}/${slug}`,
+    start_url: `${frontOrigin}/${slug}${contexto.caminho}`,
     scope: `${frontOrigin}/${slug}`,
     display: 'standalone',
     background_color: '#ffffff',
@@ -899,6 +909,7 @@ router.post('/:id/admin-login', asyncHandler(async (req, res) => {
   }
 
   await registrarLog({ tipo: 'ACESSO', empresaId: empresa.id, empresaNome: empresa.nome, ator: usuario, acao: 'Login no admin da loja' });
+  await prisma.empresa.update({ where: { id: empresa.id }, data: { ultimoAcessoAdminEm: new Date() } });
   const token = signToken({ role: 'EMPRESA_ADMIN', empresaId: empresa.id }, ADMIN_TOKEN_TTL);
   res.json({ id: empresa.id, nome: empresa.nome, usuario: empresa.usuario, token });
 }));
@@ -953,6 +964,7 @@ router.post('/admin-login', asyncHandler(async (req, res) => {
   }
 
   await registrarLog({ tipo: 'ACESSO', empresaId: empresa.id, empresaNome: empresa.nome, ator: usuario, acao: 'Login no admin da loja (app)' });
+  await prisma.empresa.update({ where: { id: empresa.id }, data: { ultimoAcessoAdminEm: new Date() } });
   const token = signToken({ role: 'EMPRESA_ADMIN', empresaId: empresa.id }, ADMIN_TOKEN_TTL);
   res.json({
     id: empresa.id,
