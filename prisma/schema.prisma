@@ -59,6 +59,18 @@ model Empresa {
   fidelidadeAvisoFaltam  Int?    @map("fidelidade_aviso_faltam") // dispara aviso na loja quando faltar X unidades p/ o prêmio
   fidelidadeNomeItem     String? @map("fidelidade_nome_item") // nome genérico usado nas mensagens, ex: "lanches"
 
+  /// Percentual de cashback (0-100) creditado no saldo do cliente sobre o subtotal de cada pedido ENTREGUE. 0/null = desativado.
+  cashbackPercent Decimal? @map("cashback_percent") @db.Decimal(5, 2)
+
+  // Funcionalidades da loja (opt-in) — cada função só fica visível/ativa na vitrine depois que o
+  // próprio tenant aprova e liga aqui no admin dele. Todas nascem desligadas por padrão.
+  habilitarFavoritos           Boolean @default(false) @map("habilitar_favoritos")
+  habilitarPedirDeNovo         Boolean @default(false) @map("habilitar_pedir_de_novo")
+  habilitarRankingFidelidade   Boolean @default(false) @map("habilitar_ranking_fidelidade")
+  habilitarAgendamento         Boolean @default(false) @map("habilitar_agendamento")
+  habilitarAvaliacaoComFotos   Boolean @default(false) @map("habilitar_avaliacao_com_fotos")
+  habilitarNotificacoesInApp   Boolean @default(false) @map("habilitar_notificacoes_in_app")
+
   // Configurações operacionais
   lojaAbertaManual      Boolean @default(true) @map("loja_aberta_manual") // botão de emergência "Loja Aberta/Fechada"
   usarHorarioAutomatico Boolean @default(false) @map("usar_horario_automatico") // se true, cruza com HorarioFuncionamento
@@ -250,12 +262,17 @@ model Cliente {
   indicados             Cliente[] @relation("Indicacoes")
   indicacaoRecompensada Boolean   @default(false) @map("indicacao_recompensada")
 
+  /// Saldo de cashback em R$, creditado (Empresa.cashbackPercent sobre o subtotal) quando um pedido é ENTREGUE, e debitado quando usado como desconto num pedido futuro.
+  saldoCashback Decimal @default(0) @map("saldo_cashback") @db.Decimal(10, 2)
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  pedidos   Pedido[]
-  enderecos EnderecoCliente[]
-  favoritos Favorito[]
+  pedidos         Pedido[]
+  enderecos       EnderecoCliente[]
+  favoritos       Favorito[]
+  cuponsRecebidos Cupom[]
+  notificacoes    NotificacaoCliente[]
 
   @@unique([empresaId, email])
   @@unique([empresaId, codigoIndicacao])
@@ -339,6 +356,10 @@ model Cupom {
   ativo                Boolean   @default(true)
   createdAt            DateTime  @default(now()) @map("created_at")
   updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  /// Quando preenchido, o cupom é privado — só esse cliente pode aplicá-lo (ex: campanha "sentimos sua falta"). Null = cupom público, qualquer cliente da loja pode usar.
+  clienteAlvoId        String?   @map("cliente_alvo_id") @db.Uuid
+  clienteAlvo          Cliente?  @relation(fields: [clienteAlvoId], references: [id], onDelete: Cascade)
 
   pedidos Pedido[]
 
@@ -535,6 +556,10 @@ model Pedido {
   itemGratisResgatado           Boolean  @default(false) @map("item_gratis_resgatado")
   unidadesFidelidadeCreditadas  Int?     @map("unidades_fidelidade_creditadas") // preenchido 1x ao entregar, evita crédito duplicado
 
+  // Cashback: usado (debitado do saldo, como desconto) na criação do pedido; creditado (Empresa.cashbackPercent) 1x ao entregar.
+  cashbackUsado      Decimal? @map("cashback_usado") @db.Decimal(10, 2)
+  cashbackCreditado  Decimal? @map("cashback_creditado") @db.Decimal(10, 2) // preenchido 1x ao entregar, evita crédito duplicado
+
   // Cupom aplicado (snapshot do código, pois o cupom pode mudar/expirar depois)
   cupomId        String?  @map("cupom_id") @db.Uuid
   cupom          Cupom?   @relation(fields: [cupomId], references: [id], onDelete: SetNull)
@@ -576,6 +601,21 @@ model PushSubscription {
   createdAt DateTime @default(now()) @map("created_at")
 
   @@map("push_subscriptions")
+}
+
+/// Feed de notificações in-app do cliente (sininho) — complementa o push, funciona mesmo sem
+/// permissão de notificação concedida no navegador. Gerado nos mesmos eventos que disparam push.
+model NotificacaoCliente {
+  id        String   @id @default(uuid()) @db.Uuid
+  clienteId String   @map("cliente_id") @db.Uuid
+  cliente   Cliente  @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  titulo    String
+  corpo     String
+  url       String?
+  lida      Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("notificacoes_cliente")
 }
 
 model PedidoItem {

@@ -432,6 +432,13 @@ router.get('/slug/:slug', asyncHandler(async (req, res) => {
       fidelidadeValidadeDias: true,
       fidelidadeAvisoFaltam: true,
       fidelidadeNomeItem: true,
+      cashbackPercent: true,
+      habilitarFavoritos: true,
+      habilitarPedirDeNovo: true,
+      habilitarRankingFidelidade: true,
+      habilitarAgendamento: true,
+      habilitarAvaliacaoComFotos: true,
+      habilitarNotificacoesInApp: true,
       lojaAbertaManual: true,
       usarHorarioAutomatico: true,
       tempoEstimadoMin: true,
@@ -1250,6 +1257,7 @@ router.put('/:id/frete-config', requireEmpresaAdmin('id'), asyncHandler(async (r
  *               fidelidadeValidadeDias: { type: integer, nullable: true }
  *               fidelidadeAvisoFaltam: { type: integer, nullable: true }
  *               fidelidadeNomeItem: { type: string, nullable: true }
+ *               cashbackPercent: { type: number, nullable: true }
  *     responses:
  *       200:
  *         description: Configuração atualizada
@@ -1259,7 +1267,7 @@ router.put('/:id/frete-config', requireEmpresaAdmin('id'), asyncHandler(async (r
  *         description: Empresa não encontrada
  */
 router.put('/:id/fidelidade-config', requireEmpresaAdmin('id'), asyncHandler(async (req, res) => {
-  const { fidelidadeLogoUrl, fidelidadeValidadeDias, fidelidadeAvisoFaltam, fidelidadeNomeItem } = req.body;
+  const { fidelidadeLogoUrl, fidelidadeValidadeDias, fidelidadeAvisoFaltam, fidelidadeNomeItem, cashbackPercent } = req.body;
 
   const erros = [];
   if (fidelidadeValidadeDias !== undefined && fidelidadeValidadeDias !== null && fidelidadeValidadeDias !== '') {
@@ -1271,6 +1279,12 @@ router.put('/:id/fidelidade-config', requireEmpresaAdmin('id'), asyncHandler(asy
     const valor = Number(fidelidadeAvisoFaltam);
     if (!Number.isInteger(valor) || valor < 1 || valor > 9) {
       erros.push('Campo "fidelidadeAvisoFaltam" deve ser um inteiro entre 1 e 9');
+    }
+  }
+  if (cashbackPercent !== undefined && cashbackPercent !== null && cashbackPercent !== '') {
+    const valor = Number(cashbackPercent);
+    if (Number.isNaN(valor) || valor < 0 || valor > 100) {
+      erros.push('Campo "cashbackPercent" deve ser um número entre 0 e 100');
     }
   }
   if (erros.length) {
@@ -1289,8 +1303,66 @@ router.put('/:id/fidelidade-config', requireEmpresaAdmin('id'), asyncHandler(asy
           ? { fidelidadeAvisoFaltam: fidelidadeAvisoFaltam === null || fidelidadeAvisoFaltam === '' ? null : Number(fidelidadeAvisoFaltam) }
           : {}),
         ...(fidelidadeNomeItem !== undefined ? { fidelidadeNomeItem: fidelidadeNomeItem || null } : {}),
+        ...(cashbackPercent !== undefined
+          ? { cashbackPercent: cashbackPercent === null || cashbackPercent === '' ? null : Number(cashbackPercent) }
+          : {}),
       },
     });
+    res.json(serializeEmpresa(empresa));
+  } catch (error) {
+    return handlePrismaError(error, res);
+  }
+}));
+
+const CAMPOS_FUNCIONALIDADES = [
+  'habilitarFavoritos', 'habilitarPedirDeNovo', 'habilitarRankingFidelidade',
+  'habilitarAgendamento', 'habilitarAvaliacaoComFotos', 'habilitarNotificacoesInApp',
+];
+
+/**
+ * @openapi
+ * /empresas/{id}/funcionalidades-config:
+ *   put:
+ *     summary: Liga/desliga funcionalidades opcionais da loja (favoritos, agendamento, notificações in-app etc.) — cada uma só fica visível na vitrine depois que o tenant aprova aqui.
+ *     tags: [Empresas]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               habilitarFavoritos: { type: boolean }
+ *               habilitarPedirDeNovo: { type: boolean }
+ *               habilitarRankingFidelidade: { type: boolean }
+ *               habilitarAgendamento: { type: boolean }
+ *               habilitarAvaliacaoComFotos: { type: boolean }
+ *               habilitarNotificacoesInApp: { type: boolean }
+ *     responses:
+ *       200:
+ *         description: Configuração atualizada
+ *       400:
+ *         description: Dados inválidos
+ *       404:
+ *         description: Empresa não encontrada
+ */
+router.put('/:id/funcionalidades-config', requireEmpresaAdmin('id'), asyncHandler(async (req, res) => {
+  const data = {};
+  for (const campo of CAMPOS_FUNCIONALIDADES) {
+    if (req.body[campo] !== undefined) {
+      if (typeof req.body[campo] !== 'boolean') {
+        return res.status(400).json({ error: `Campo "${campo}" deve ser booleano` });
+      }
+      data[campo] = req.body[campo];
+    }
+  }
+
+  try {
+    const empresa = await prisma.empresa.update({ where: { id: req.params.id }, data });
     res.json(serializeEmpresa(empresa));
   } catch (error) {
     return handlePrismaError(error, res);

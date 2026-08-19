@@ -6,7 +6,9 @@ const { calcularStatusLoja } = require('../lib/statusLoja');
 const { calcularFrete } = require('../lib/calcularFrete');
 const { disponibilidadeFidelidade, creditarUnidadesFidelidade } = require('../lib/fidelidade');
 const { RECOMPENSA_INDICACAO_UNIDADES } = require('../lib/indicacao');
+const { creditarCashback } = require('../lib/cashback');
 const { notificarPedido } = require('../lib/pushNotifications');
+const { criarNotificacaoCliente } = require('../lib/notificacoesCliente');
 const { requireEmpresaAdmin, requireCliente } = require('../lib/auth');
 
 const router = Router({ mergeParams: true });
@@ -200,7 +202,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
 router.post('/', asyncHandler(async (req, res) => {
   const {
     clienteNome, clienteTelefone, endereco, bairro, referencia,
-    formaPagamento, trocoPara, observacoes, itens, usarItemGratis, cupomCodigo, agendadoPara,
+    formaPagamento, trocoPara, observacoes, itens, usarItemGratis, cupomCodigo, agendadoPara, usarCashback,
   } = req.body;
 
   // Checkout aceita convidado (sem login) — clienteId nunca vem do corpo da requisição, só do
@@ -222,6 +224,9 @@ router.post('/', asyncHandler(async (req, res) => {
   }
   let agendadoParaData = null;
   if (agendadoPara) {
+    if (!req.empresa.habilitarAgendamento) {
+      erros.push('Esta loja não habilitou o agendamento de pedidos');
+    }
     agendadoParaData = new Date(agendadoPara);
     if (Number.isNaN(agendadoParaData.getTime()) || agendadoParaData.getTime() <= Date.now()) {
       erros.push('Campo "agendadoPara" precisa ser uma data/hora válida no futuro');
@@ -369,6 +374,22 @@ router.post('/', asyncHandler(async (req, res) => {
     }
   }
 
+  let cashbackUsadoValor = 0;
+  if (usarCashback) {
+    if (!cliente) {
+      return res.status(400).json({ error: 'É preciso estar logado para usar o saldo de cashback' });
+    }
+    const valorSolicitado = Number(usarCashback);
+    if (!Number.isFinite(valorSolicitado) || valorSolicitado <= 0) {
+      return res.status(400).json({ error: 'Campo "usarCashback" deve ser um valor maior que zero' });
+    }
+    if (valorSolicitado > Number(cliente.saldoCashback)) {
+      return res.status(400).json({ error: 'Saldo de cashback insuficiente' });
+    }
+    cashbackUsadoValor = Math.min(valorSolicitado, subtotal);
+    subtotal = Math.max(0, subtotal - cashbackUsadoValor);
+  }
+
   const total = subtotal + taxaEntregaFinal;
 
   const pedido = await prisma.$transaction(async (tx) => {
@@ -400,6 +421,7 @@ router.post('/', asyncHandler(async (req, res) => {
         cupomId: cupomAplicado?.id || null,
         cupomCodigo: cupomAplicado?.codigo || null,
         descontoCupom,
+        cashbackUsado: cashbackUsadoValor > 0 ? cashbackUsadoValor : null,
         itens: { create: itensParaCriar },
       },
       include: { itens: { include: { opcoesSelecionadas: true } }, motoboy: { select: { id: true, nome: true, latitudeAtual: true, longitudeAtual: true, localizacaoAtualizadaEm: true } } },
@@ -409,6 +431,13 @@ router.post('/', asyncHandler(async (req, res) => {
       await tx.cliente.update({
         where: { id: cliente.id },
         data: { itensGratisResgatados: { increment: 1 } },
+      });
+    }
+
+    if (cashbackUsadoValor > 0) {
+      await tx.cliente.update({
+        where: { id: cliente.id },
+        data: { saldoCashback: { decrement: cashbackUsadoValor } },
       });
     }
 
@@ -512,7 +541,7 @@ router.patch('/:id/status', asyncHandler(async (req, res, next) => {
   const carimboCampo = TIMESTAMP_POR_STATUS[status];
 
   const atualizado = await prisma.$transaction(async (tx) => {
-    const salvo = await tx.pedido.update({
+    let salvo = await tx.pedido.update({
       where: { id: pedido.id },
       data: {
         status,
@@ -542,6 +571,21 @@ router.patch('/:id/status', asyncHandler(async (req, res, next) => {
           where: { id: salvo.id },
           data: { unidadesFidelidadeCreditadas: unidades },
         });
+        // Reflete no objeto que a rota devolve — sem isso, o response deste PATCH ficava com o
+        // valor antigo mesmo já tendo sido atualizado no banco acima.
+        salvo = { ...salvo, unidadesFidelidadeCreditadas: unidades };
+      }
+
+      // Credita cashback sobre o subtotal (1x por pedido, guardado por cashbackCreditado).
+      const cashbackPercent = req.empresa.cashbackPercent ? Number(req.empresa.cashbackPercent) : 0;
+      if (salvo.clienteId && cashbackPercent > 0 && salvo.cashbackCreditado == null) {
+        const valorCashback = Number(salvo.subtotal) * (cashbackPercent / 100);
+        await creditarCashback(tx, salvo.clienteId, valorCashback);
+        await tx.pedido.update({
+          where: { id: salvo.id },
+          data: { cashbackCreditado: valorCashback },
+        });
+        salvo = { ...salvo, cashbackCreditado: valorCashback };
       }
 
       // Indicação: se esse pedido é a primeira compra concluída de um cliente indicado por
@@ -573,11 +617,19 @@ router.patch('/:id/status', asyncHandler(async (req, res, next) => {
   };
   if (MENSAGEM_POR_STATUS[atualizado.status]) {
     const frontOrigin = process.env.FRONT_ORIGIN || 'https://saltfood.com.br';
+    const url = `${frontOrigin}/${req.empresa.slug}/pedidos/${atualizado.id}`;
     notificarPedido(atualizado.id, {
       title: `Pedido #${atualizado.numero}`,
       body: MENSAGEM_POR_STATUS[atualizado.status],
-      url: `${frontOrigin}/${req.empresa.slug}/pedidos/${atualizado.id}`,
+      url,
     }).catch(() => {});
+    if (atualizado.clienteId && req.empresa.habilitarNotificacoesInApp) {
+      criarNotificacaoCliente(atualizado.clienteId, {
+        titulo: `Pedido #${atualizado.numero}`,
+        corpo: MENSAGEM_POR_STATUS[atualizado.status],
+        url,
+      }).catch(() => {});
+    }
   }
 
   res.json(atualizado);
@@ -853,6 +905,9 @@ router.post('/:id/avaliar-pedido', requireCliente(), asyncHandler(async (req, re
   }
   if (fotos !== undefined && (!Array.isArray(fotos) || !fotos.every((f) => typeof f === 'string'))) {
     return res.status(400).json({ error: 'Campo "fotos" deve ser uma lista de URLs' });
+  }
+  if (Array.isArray(fotos) && fotos.length > 0 && !req.empresa.habilitarAvaliacaoComFotos) {
+    return res.status(400).json({ error: 'Esta loja não habilitou fotos na avaliação' });
   }
 
   const pedido = await prisma.pedido.findFirst({

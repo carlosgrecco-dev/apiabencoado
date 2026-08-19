@@ -88,9 +88,18 @@ const validarPayload = ({ codigo, tipo, valor }) => {
  */
 router.get('/', asyncHandler(async (req, res) => {
   const { ativo } = req.query;
+
+  // Rota pública (sem guard — usada tanto pelo admin quanto pela vitrine da loja). Cupons com
+  // clienteAlvoId só aparecem pro admin (gestão) ou pro próprio cliente-alvo — nunca pra outros.
+  const souAdmin = req.auth && req.auth.role === 'EMPRESA_ADMIN' && req.auth.empresaId === req.params.empresaId;
+  const meuClienteId = (req.auth && req.auth.role === 'CLIENTE' && req.auth.empresaId === req.params.empresaId)
+    ? req.auth.clienteId
+    : null;
+
   const where = {
     empresaId: req.params.empresaId,
     ...(ativo !== undefined ? { ativo: ativo === 'true' } : {}),
+    ...(souAdmin ? {} : { OR: [{ clienteAlvoId: null }, ...(meuClienteId ? [{ clienteAlvoId: meuClienteId }] : [])] }),
   };
   const cupons = await prisma.cupom.findMany({ where, orderBy: { createdAt: 'desc' } });
   res.json(cupons);
@@ -122,11 +131,18 @@ router.get('/', asyncHandler(async (req, res) => {
  *         description: Código já cadastrado
  */
 router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
-  const { codigo, descricao, tipo, valor, apenasPrimeiraCompra, valorMinimoPedido, usoMaximo, validoAte, ativo } = req.body;
+  const { codigo, descricao, tipo, valor, apenasPrimeiraCompra, valorMinimoPedido, usoMaximo, validoAte, ativo, clienteAlvoId } = req.body;
 
   const erros = validarPayload(req.body);
   if (erros.length) {
     return res.status(400).json({ error: erros.join('; ') });
+  }
+
+  if (clienteAlvoId) {
+    const clienteAlvo = await prisma.cliente.findFirst({ where: { id: clienteAlvoId, empresaId: req.params.empresaId } });
+    if (!clienteAlvo) {
+      return res.status(400).json({ error: 'Cliente informado para o cupom pessoal não pertence a esta empresa' });
+    }
   }
 
   try {
@@ -141,6 +157,7 @@ router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
         valorMinimoPedido: valorMinimoPedido || null,
         usoMaximo: usoMaximo || null,
         validoAte: validoAte ? new Date(validoAte) : null,
+        clienteAlvoId: clienteAlvoId || null,
         ...(ativo !== undefined ? { ativo } : {}),
       },
     });
@@ -178,7 +195,7 @@ router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
  *         description: Cupom não encontrado
  */
 router.put('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
-  const { codigo, descricao, tipo, valor, apenasPrimeiraCompra, valorMinimoPedido, usoMaximo, validoAte, ativo } = req.body;
+  const { codigo, descricao, tipo, valor, apenasPrimeiraCompra, valorMinimoPedido, usoMaximo, validoAte, ativo, clienteAlvoId } = req.body;
 
   const erros = validarPayload(req.body);
   if (erros.length) {
@@ -188,6 +205,13 @@ router.put('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
   const existente = await prisma.cupom.findFirst({ where: { id: req.params.id, empresaId: req.params.empresaId } });
   if (!existente) {
     return res.status(404).json({ error: 'Cupom não encontrado' });
+  }
+
+  if (clienteAlvoId) {
+    const clienteAlvo = await prisma.cliente.findFirst({ where: { id: clienteAlvoId, empresaId: req.params.empresaId } });
+    if (!clienteAlvo) {
+      return res.status(400).json({ error: 'Cliente informado para o cupom pessoal não pertence a esta empresa' });
+    }
   }
 
   try {
@@ -202,6 +226,7 @@ router.put('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
         valorMinimoPedido: valorMinimoPedido || null,
         usoMaximo: usoMaximo || null,
         validoAte: validoAte ? new Date(validoAte) : null,
+        clienteAlvoId: clienteAlvoId || null,
         ...(ativo !== undefined ? { ativo } : {}),
       },
     });

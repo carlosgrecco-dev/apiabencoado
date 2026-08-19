@@ -27,6 +27,10 @@ async function validarCupom(db, empresaId, codigo, clienteId, subtotal) {
     return { ok: false, error: 'Este cupom expirou' };
   }
 
+  if (cupom.clienteAlvoId && cupom.clienteAlvoId !== clienteId) {
+    return { ok: false, error: 'Este cupom é pessoal e não pode ser usado nesta conta' };
+  }
+
   if (cupom.usoMaximo != null && cupom.usosRealizados >= cupom.usoMaximo) {
     return { ok: false, error: 'Este cupom atingiu o limite de usos' };
   }

@@ -1,5 +1,6 @@
 const { Router } = require('express');
 const prisma = require('../lib/prisma');
+const loadEmpresa = require('../lib/loadEmpresa');
 const { requireCliente } = require('../lib/auth');
 
 const router = Router({ mergeParams: true });
@@ -19,8 +20,15 @@ const loadCliente = asyncHandler(async (req, res, next) => {
 });
 
 // Favoritos são sempre do próprio cliente — nenhum caso de uso de admin aqui.
+router.use(loadEmpresa);
 router.use(requireCliente('clienteId'));
 router.use(loadCliente);
+router.use((req, res, next) => {
+  if (!req.empresa.habilitarFavoritos) {
+    return res.status(403).json({ error: 'Esta loja não habilitou a lista de favoritos' });
+  }
+  next();
+});
 
 /**
  * @openapi
