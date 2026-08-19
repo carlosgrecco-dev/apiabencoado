@@ -255,10 +255,24 @@ model Cliente {
 
   pedidos   Pedido[]
   enderecos EnderecoCliente[]
+  favoritos Favorito[]
 
   @@unique([empresaId, email])
   @@unique([empresaId, codigoIndicacao])
   @@map("clientes")
+}
+
+/// Produto favoritado por um cliente, pra achar rápido de novo na loja.
+model Favorito {
+  id        String   @id @default(uuid()) @db.Uuid
+  clienteId String   @map("cliente_id") @db.Uuid
+  cliente   Cliente  @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  produtoId String   @map("produto_id") @db.Uuid
+  produto   Produto  @relation(fields: [produtoId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([clienteId, produtoId])
+  @@map("favoritos")
 }
 
 model EnderecoCliente {
@@ -376,6 +390,7 @@ model Produto {
   itensPedido PedidoItem[]
   variacoes   ProdutoVariacao[]
   gruposOpcao ProdutoGrupoOpcao[]
+  favoritos   Favorito[]
 
   @@map("produtos")
 }
@@ -456,6 +471,9 @@ model Motoboy {
   longitudeAtual           Decimal?  @map("longitude_atual") @db.Decimal(10, 7)
   localizacaoAtualizadaEm  DateTime? @map("localizacao_atualizada_em")
 
+  /// Toggle manual que o próprio motoboy liga/desliga no portal dele, pra sinalizar ao admin se está livre pra nova corrida. Escopo só desta loja — não é um pool de motoboys da plataforma.
+  disponivel Boolean @default(true)
+
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("updated_at")
 
@@ -501,10 +519,15 @@ model Pedido {
   status          StatusPedido   @default(RECEBIDO)
   observacoes     String?
 
+  /// Preenchido só quando o cliente escolhe "agendar" no checkout em vez de "pedir agora" — horário desejado de entrega/retirada.
+  agendadoPara DateTime? @map("agendado_para")
+
   motoboyId          String?  @map("motoboy_id") @db.Uuid
   motoboy            Motoboy? @relation(fields: [motoboyId], references: [id], onDelete: SetNull)
   taxaEntregaMotoboy Decimal? @map("taxa_entrega_motoboy") @db.Decimal(10, 2)
   motoboyPago        Boolean  @default(false) @map("motoboy_pago")
+  /// Foto anexada pelo motoboy como comprovante ao confirmar a entrega (ENTREGUE).
+  fotoEntrega        String?  @map("foto_entrega")
 
   // Fidelidade
   clienteId                     String?  @map("cliente_id") @db.Uuid
@@ -521,6 +544,8 @@ model Pedido {
   // Avaliações (só liberadas após ENTREGUE)
   notaPedido        Int?      @map("nota_pedido")
   comentarioPedido  String?   @map("comentario_pedido")
+  /// URLs das fotos anexadas pelo cliente na avaliação (upload usa a mesma rota /uploads já existente).
+  fotosAvaliacao    String[]  @default([]) @map("fotos_avaliacao")
   avaliadoEm        DateTime? @map("avaliado_em")
   notaMotoboy       Int?      @map("nota_motoboy")
   comentarioMotoboy String?   @map("comentario_motoboy")
