@@ -407,6 +407,63 @@ router.patch('/:id/esgotado', requireEmpresaAdmin(), asyncHandler(async (req, re
 
 /**
  * @openapi
+ * /empresas/{empresaId}/produtos/reordenar:
+ *   patch:
+ *     summary: Atualiza a ordem de exibição de vários produtos de uma vez — usado pelos botões de mover para cima/baixo
+ *     tags: [Produtos]
+ *     parameters:
+ *       - in: path
+ *         name: empresaId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [itens]
+ *             properties:
+ *               itens:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   required: [id, ordem]
+ *                   properties:
+ *                     id: { type: string, format: uuid }
+ *                     ordem: { type: integer }
+ *     responses:
+ *       200:
+ *         description: Ordem atualizada
+ *       400:
+ *         description: Payload inválido ou algum produto não pertence a esta empresa
+ */
+router.patch('/reordenar', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+  const { itens } = req.body;
+  if (!Array.isArray(itens) || itens.length === 0 || itens.some((i) => !i || typeof i.id !== 'string' || typeof i.ordem !== 'number')) {
+    return res.status(400).json({ error: 'Campo "itens" é obrigatório e deve ser uma lista de { id, ordem }' });
+  }
+
+  const ids = itens.map((i) => i.id);
+  const existentes = await prisma.produto.findMany({
+    where: { id: { in: ids }, empresaId: req.params.empresaId },
+    select: { id: true },
+  });
+  if (existentes.length !== ids.length) {
+    return res.status(400).json({ error: 'Um ou mais produtos não pertencem a esta empresa' });
+  }
+
+  // Transação: ou todos os produtos ficam na nova ordem, ou nenhum — evita a lista ficar
+  // inconsistente se um item falhar no meio da atualização.
+  await prisma.$transaction(
+    itens.map((item) => prisma.produto.update({ where: { id: item.id }, data: { ordem: item.ordem } }))
+  );
+
+  res.json({ ok: true });
+}));
+
+/**
+ * @openapi
  * /empresas/{empresaId}/produtos/{id}:
  *   delete:
  *     summary: Remove um produto
