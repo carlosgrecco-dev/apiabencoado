@@ -5,6 +5,7 @@ const { calcularStatusLoja } = require('../lib/statusLoja');
 const { registrarLog } = require('../lib/auditLog');
 const { signToken, requireSuperAdmin, requireEmpresaAdmin } = require('../lib/auth');
 const { gerarCodigoIndicacaoEmpresaUnico } = require('../lib/indicacaoEmpresa');
+const { gerarIconePwa, TAMANHOS_VALIDOS } = require('../lib/pwaIcon');
 
 const ADMIN_TOKEN_TTL = '12h';
 
@@ -324,26 +325,92 @@ router.get('/slug/:slug/manifest.json', asyncHandler(async (req, res) => {
   }
 
   const frontOrigin = process.env.FRONT_ORIGIN || 'https://saltfood.com.br';
+  const apiOrigin = `${req.protocol}://${req.get('host')}`;
   const slug = req.params.slug.toLowerCase();
-  const iconUrl = empresa.logoUrl || `${frontOrigin}/saltfood-icon.png`;
-  const contexto = CONTEXTOS_MANIFEST[req.query.contexto] || CONTEXTOS_MANIFEST.loja;
+  const contextoChave = CONTEXTOS_MANIFEST[req.query.contexto] ? req.query.contexto : 'loja';
+  const contexto = CONTEXTOS_MANIFEST[contextoChave];
   const nome = `${empresa.nome}${contexto.sufixoNome}`;
+  const startUrl = `${frontOrigin}/${slug}${contexto.caminho}`;
+  const manifestUrl = `${apiOrigin}/empresas/slug/${slug}/manifest.json?contexto=${contextoChave}`;
+
+  // Ícone dinâmico (redimensionado a partir da logo da loja) quando ela tem logo cadastrada;
+  // senão cai no ícone fixo do app. Servido pela própria API (rota abaixo), nunca a logoUrl crua
+  // — o navegador exige tamanhos exatos (192/512) e um ícone maskable com margem de segurança.
+  const iconeUrl = (size, maskable) =>
+    empresa.logoUrl
+      ? `${apiOrigin}/empresas/slug/${slug}/pwa-icon.png?size=${size}&maskable=${maskable ? 1 : 0}`
+      : `${frontOrigin}/saltfood-icon.png`;
 
   res.set('Content-Type', 'application/manifest+json');
   res.json({
+    // Identidade estável do app — não deve mudar quando a loja troca nome/logo, senão o Chrome
+    // trata a instalação existente como um app novo e a antiga vira um atalho órfão na tela.
+    id: startUrl,
     name: nome,
     short_name: nome,
     description: empresa.descricao || `Peça online na ${empresa.nome}, com entrega rápida.`,
-    start_url: `${frontOrigin}/${slug}${contexto.caminho}`,
+    start_url: startUrl,
     scope: `${frontOrigin}/${slug}`,
     display: 'standalone',
     background_color: '#ffffff',
     theme_color: empresa.corPrimaria,
+    // Permite ao front checar via navigator.getInstalledRelatedApps() se ESTE app (esta
+    // loja+contexto) já está instalado, sem confundir com a instalação de outra loja.
+    related_applications: [{ platform: 'webapp', url: manifestUrl }],
+    prefer_related_applications: false,
     icons: [
-      { src: iconUrl, sizes: '192x192', type: 'image/png', purpose: 'any' },
-      { src: iconUrl, sizes: '512x512', type: 'image/png', purpose: 'any' },
+      { src: iconeUrl(192, false), sizes: '192x192', type: 'image/png', purpose: 'any' },
+      { src: iconeUrl(512, false), sizes: '512x512', type: 'image/png', purpose: 'any' },
+      { src: iconeUrl(192, true), sizes: '192x192', type: 'image/png', purpose: 'maskable' },
+      { src: iconeUrl(512, true), sizes: '512x512', type: 'image/png', purpose: 'maskable' },
     ],
   });
+}));
+
+/**
+ * @openapi
+ * /empresas/slug/{slug}/pwa-icon.png:
+ *   get:
+ *     summary: Ícone do PWA da loja, redimensionado a partir da logo cadastrada (192 ou 512px, opcionalmente maskable)
+ *     tags: [Empresas]
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema: { type: string }
+ *       - in: query
+ *         name: size
+ *         schema: { type: integer, enum: [192, 512] }
+ *       - in: query
+ *         name: maskable
+ *         schema: { type: string, enum: ['0', '1'] }
+ *     responses:
+ *       200:
+ *         description: Imagem PNG
+ */
+router.get('/slug/:slug/pwa-icon.png', asyncHandler(async (req, res) => {
+  const frontOrigin = process.env.FRONT_ORIGIN || 'https://saltfood.com.br';
+  const fallback = () => res.redirect(302, `${frontOrigin}/saltfood-icon.png`);
+
+  const empresa = await prisma.empresa.findUnique({
+    where: { slug: req.params.slug.toLowerCase() },
+    select: { logoUrl: true },
+  });
+  if (!empresa || !empresa.logoUrl) return fallback();
+
+  const size = TAMANHOS_VALIDOS.includes(Number(req.query.size)) ? Number(req.query.size) : 192;
+  const maskable = req.query.maskable === '1';
+
+  try {
+    const png = await gerarIconePwa(empresa.logoUrl, size, maskable);
+    res.set('Content-Type', 'image/png');
+    res.set('Cache-Control', 'public, max-age=86400');
+    res.send(png);
+  } catch {
+    // Logo inválida, inacessível ou bloqueada pelas checagens de segurança — cai no ícone fixo
+    // em vez de devolver erro, pra nunca deixar o manifest com um ícone quebrado.
+    fallback();
+  }
 }));
 
 /** Escapa texto pra uso seguro dentro de atributos/conteúdo HTML (título e descrição vêm do lojista). */
