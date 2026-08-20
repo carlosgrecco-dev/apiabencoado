@@ -333,13 +333,19 @@ router.get('/slug/:slug/manifest.json', asyncHandler(async (req, res) => {
   const startUrl = `${frontOrigin}/${slug}${contexto.caminho}`;
   const manifestUrl = `${apiOrigin}/empresas/slug/${slug}/manifest.json?contexto=${contextoChave}`;
 
-  // Ícone dinâmico (redimensionado a partir da logo da loja) quando ela tem logo cadastrada;
-  // senão cai no ícone fixo do app. Servido pela própria API (rota abaixo), nunca a logoUrl crua
-  // — o navegador exige tamanhos exatos (192/512) e um ícone maskable com margem de segurança.
-  const iconeUrl = (size, maskable) =>
-    empresa.logoUrl
+  // Ícone dinâmico, redimensionado pela própria API (rota abaixo) — nunca a URL crua, porque o
+  // navegador exige tamanhos exatos (192/512) e um ícone maskable com margem de segurança.
+  // No painel administrativo (contexto "admin") o ícone é sempre a marca fixa da plataforma, não
+  // a logo da loja — quem instala o painel de gestão reconhece o app pelo "SaltFood", a loja em si
+  // continua usando a própria logo na vitrine (contexto "loja").
+  const iconeUrl = (size, maskable) => {
+    if (contextoChave === 'admin') {
+      return `${apiOrigin}/empresas/slug/${slug}/pwa-icon.png?fonte=admin&size=${size}&maskable=${maskable ? 1 : 0}`;
+    }
+    return empresa.logoUrl
       ? `${apiOrigin}/empresas/slug/${slug}/pwa-icon.png?size=${size}&maskable=${maskable ? 1 : 0}`
       : `${frontOrigin}/saltfood-icon.png`;
+  };
 
   res.set('Content-Type', 'application/manifest+json');
   res.json({
@@ -392,17 +398,25 @@ router.get('/slug/:slug/pwa-icon.png', asyncHandler(async (req, res) => {
   const frontOrigin = process.env.FRONT_ORIGIN || 'https://saltfood.com.br';
   const fallback = () => res.redirect(302, `${frontOrigin}/saltfood-icon.png`);
 
-  const empresa = await prisma.empresa.findUnique({
-    where: { slug: req.params.slug.toLowerCase() },
-    select: { logoUrl: true },
-  });
-  if (!empresa || !empresa.logoUrl) return fallback();
+  // fonte=admin é um valor fixo (não vem de URL externa nenhuma) usado só pelo manifest do
+  // próprio painel administrativo, pra sempre usar a marca da plataforma em vez da logo da loja.
+  let fonteImagem;
+  if (req.query.fonte === 'admin') {
+    fonteImagem = `${frontOrigin}/saltfood-icon-3d.png`;
+  } else {
+    const empresa = await prisma.empresa.findUnique({
+      where: { slug: req.params.slug.toLowerCase() },
+      select: { logoUrl: true },
+    });
+    if (!empresa || !empresa.logoUrl) return fallback();
+    fonteImagem = empresa.logoUrl;
+  }
 
   const size = TAMANHOS_VALIDOS.includes(Number(req.query.size)) ? Number(req.query.size) : 192;
   const maskable = req.query.maskable === '1';
 
   try {
-    const png = await gerarIconePwa(empresa.logoUrl, size, maskable);
+    const png = await gerarIconePwa(fonteImagem, size, maskable);
     res.set('Content-Type', 'image/png');
     res.set('Cache-Control', 'public, max-age=86400');
     res.send(png);
