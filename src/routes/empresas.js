@@ -337,11 +337,11 @@ router.get('/slug/:slug/manifest.json', asyncHandler(async (req, res) => {
   // senão cai no ícone fixo do app. Servido pela própria API (rota abaixo), nunca a logoUrl crua
   // — o navegador exige tamanhos exatos (192/512) e um ícone maskable com margem de segurança.
   // Vale pra todo contexto (loja/admin/motoboy) — cada tenant instala com a própria logo, a marca
-  // fixa da plataforma (saltfood.png/saltfood-icon-3d.png) é só pro app do Super Admin.
+  // fixa da plataforma (logo.png) é só pro app do Super Admin.
   const iconeUrl = (size, maskable) =>
     empresa.logoUrl
       ? `${apiOrigin}/empresas/slug/${slug}/pwa-icon.png?size=${size}&maskable=${maskable ? 1 : 0}`
-      : `${frontOrigin}/saltfood-icon.png`;
+      : `${frontOrigin}/logo.png`;
 
   res.set('Content-Type', 'application/manifest+json');
   res.json({
@@ -392,7 +392,7 @@ router.get('/slug/:slug/manifest.json', asyncHandler(async (req, res) => {
  */
 router.get('/slug/:slug/pwa-icon.png', asyncHandler(async (req, res) => {
   const frontOrigin = process.env.FRONT_ORIGIN || 'https://saltfood.com.br';
-  const fallback = () => res.redirect(302, `${frontOrigin}/saltfood-icon.png`);
+  const fallback = () => res.redirect(302, `${frontOrigin}/logo.png`);
 
   const empresa = await prisma.empresa.findUnique({
     where: { slug: req.params.slug.toLowerCase() },
@@ -456,7 +456,7 @@ router.get('/slug/:slug/embed', asyncHandler(async (req, res) => {
   const url = `${frontOrigin}/${slug}`;
   const titulo = escapeHtml(empresa.nome);
   const descricao = escapeHtml(empresa.descricao || `Peça online na ${empresa.nome}, com entrega rápida.`);
-  const imagem = escapeHtml(empresa.logoUrl || `${frontOrigin}/saltfood.png`);
+  const imagem = escapeHtml(empresa.logoUrl || `${frontOrigin}/logo.png`);
 
   res.set('Content-Type', 'text/html; charset=utf-8');
   res.send(`<!doctype html>
