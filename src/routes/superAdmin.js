@@ -193,4 +193,82 @@ router.get('/dashboard', requireSuperAdmin, asyncHandler(async (req, res) => {
   });
 }));
 
+/**
+ * @openapi
+ * /super-admin/saltfood-coins:
+ *   get:
+ *     summary: Relatório do SaltFood Coins — ganho/gasto por loja no período + saldo atual da carteira compartilhada
+ *     tags: [SuperAdmin]
+ *     parameters:
+ *       - in: query
+ *         name: de
+ *         schema: { type: string, format: date }
+ *       - in: query
+ *         name: ate
+ *         schema: { type: string, format: date }
+ *     responses:
+ *       200:
+ *         description: Métricas agregadas do SaltFood Coins
+ */
+router.get('/saltfood-coins', requireSuperAdmin, asyncHandler(async (req, res) => {
+  const { de, ate } = req.query;
+  const range = {
+    gte: de ? new Date(`${de}T00:00:00`) : undefined,
+    lte: ate ? new Date(`${ate}T23:59:59`) : undefined,
+  };
+
+  const [movimentosPorEmpresa, empresas, saldoAgregado, totalContasPlataforma] = await Promise.all([
+    prisma.coinsMovimento.groupBy({
+      by: ['empresaId', 'tipo'],
+      where: { createdAt: range },
+      _sum: { valor: true },
+    }),
+    prisma.empresa.findMany({
+      select: { id: true, nome: true, slug: true, participaSaltfoodCoins: true, saltfoodCoinsPercent: true },
+    }),
+    prisma.contaPlataforma.aggregate({ _sum: { saldoCoins: true } }),
+    prisma.contaPlataforma.count(),
+  ]);
+
+  // Ganho/gasto por loja no período — cada loja participa como origem (GANHO) e/ou destino (GASTO)
+  // dos coins gastos por clientes que ganharam em outra loja, então o "líquido" pode ser negativo
+  // (loja que mais recebe clientes gastando coins ganhos alhures) ou positivo (loja que mais credita).
+  const porEmpresaMap = new Map();
+  for (const m of movimentosPorEmpresa) {
+    const atual = porEmpresaMap.get(m.empresaId) || { ganho: 0, gasto: 0 };
+    if (m.tipo === 'GANHO') atual.ganho = Number(m._sum.valor || 0);
+    else atual.gasto = Number(m._sum.valor || 0);
+    porEmpresaMap.set(m.empresaId, atual);
+  }
+
+  const porLoja = empresas
+    .map((e) => {
+      const { ganho, gasto } = porEmpresaMap.get(e.id) || { ganho: 0, gasto: 0 };
+      return {
+        id: e.id,
+        nome: e.nome,
+        slug: e.slug,
+        participa: e.participaSaltfoodCoins,
+        percentual: e.saltfoodCoinsPercent != null ? Number(e.saltfoodCoinsPercent) : null,
+        ganhoNoPeriodo: ganho,
+        gastoNoPeriodo: gasto,
+        liquidoNoPeriodo: ganho - gasto,
+      };
+    })
+    .filter((l) => l.participa || l.ganhoNoPeriodo > 0 || l.gastoNoPeriodo > 0)
+    .sort((a, b) => (b.ganhoNoPeriodo + b.gastoNoPeriodo) - (a.ganhoNoPeriodo + a.gastoNoPeriodo));
+
+  const totalGanhoPeriodo = porLoja.reduce((sum, l) => sum + l.ganhoNoPeriodo, 0);
+  const totalGastoPeriodo = porLoja.reduce((sum, l) => sum + l.gastoNoPeriodo, 0);
+
+  res.json({
+    tenantsParticipando: empresas.filter((e) => e.participaSaltfoodCoins).length,
+    totalContasPlataforma,
+    saldoTotalAtual: Number(saldoAgregado._sum.saldoCoins || 0),
+    totalGanhoPeriodo,
+    totalGastoPeriodo,
+    porLoja,
+  });
+}));
+
 module.exports = router;
