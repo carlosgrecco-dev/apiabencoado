@@ -628,12 +628,12 @@ router.post('/', requireSuperAdmin, asyncHandler(async (req, res) => {
     }
   }
 
-  // Sem plano, o super admin pode definir a comissão avulsa (1 a 20%) já no cadastro.
+  // Sem plano, o super admin pode definir a comissão avulsa (0 a 30%) já no cadastro.
   let comissaoAvulsa = null;
   if (!planoId && comissaoPercent !== undefined && comissaoPercent !== null && comissaoPercent !== '') {
     const valor = Number(comissaoPercent);
-    if (Number.isNaN(valor) || valor < 1 || valor > 20) {
-      erros.push('Campo "comissaoPercent" deve estar entre 1 e 20');
+    if (Number.isNaN(valor) || valor < 0 || valor > 30) {
+      erros.push('Campo "comissaoPercent" deve estar entre 0 e 30');
     } else {
       comissaoAvulsa = valor;
     }
@@ -1066,7 +1066,7 @@ router.post('/admin-login', asyncHandler(async (req, res) => {
  *             type: object
  *             required: [comissaoPercent]
  *             properties:
- *               comissaoPercent: { type: number, minimum: 5, maximum: 20 }
+ *               comissaoPercent: { type: number, minimum: 0, maximum: 30 }
  *     responses:
  *       200:
  *         description: Comissão atualizada
@@ -1077,8 +1077,8 @@ router.post('/admin-login', asyncHandler(async (req, res) => {
  */
 router.patch('/:id/comissao', requireSuperAdmin, asyncHandler(async (req, res) => {
   const valor = Number(req.body.comissaoPercent);
-  if (Number.isNaN(valor) || valor < 5 || valor > 20) {
-    return res.status(400).json({ error: 'O percentual de comissão deve estar entre 5 e 20' });
+  if (Number.isNaN(valor) || valor < 0 || valor > 30) {
+    return res.status(400).json({ error: 'O percentual de comissão deve estar entre 0 e 30' });
   }
 
   try {
