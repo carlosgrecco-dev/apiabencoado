@@ -1098,6 +1098,64 @@ router.patch('/:id/comissao', requireSuperAdmin, asyncHandler(async (req, res) =
 
 /**
  * @openapi
+ * /empresas/{id}/saltfood-coins:
+ *   patch:
+ *     summary: Liga/desliga a participação da empresa no SaltFood Coins (carteira de fidelidade entre lojas) e define o percentual — só o Super Admin controla, diferente das demais funcionalidades opt-in do próprio lojista
+ *     tags: [Empresas]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [participaSaltfoodCoins]
+ *             properties:
+ *               participaSaltfoodCoins: { type: boolean }
+ *               saltfoodCoinsPercent: { type: number, nullable: true }
+ *     responses:
+ *       200:
+ *         description: Configuração atualizada
+ *       400:
+ *         description: Dados inválidos
+ *       404:
+ *         description: Empresa não encontrada
+ */
+router.patch('/:id/saltfood-coins', requireSuperAdmin, asyncHandler(async (req, res) => {
+  const { participaSaltfoodCoins, saltfoodCoinsPercent } = req.body;
+
+  if (typeof participaSaltfoodCoins !== 'boolean') {
+    return res.status(400).json({ error: 'Campo "participaSaltfoodCoins" é obrigatório e deve ser booleano' });
+  }
+  let percentValor = null;
+  if (saltfoodCoinsPercent !== undefined && saltfoodCoinsPercent !== null && saltfoodCoinsPercent !== '') {
+    percentValor = Number(saltfoodCoinsPercent);
+    if (Number.isNaN(percentValor) || percentValor < 0 || percentValor > 100) {
+      return res.status(400).json({ error: 'O percentual de SaltFood Coins deve estar entre 0 e 100' });
+    }
+  }
+
+  try {
+    const empresa = await prisma.empresa.update({
+      where: { id: req.params.id },
+      data: { participaSaltfoodCoins, saltfoodCoinsPercent: percentValor },
+    });
+    await registrarLog({
+      tipo: 'ALTERACAO_CRITICA', empresaId: empresa.id, empresaNome: empresa.nome, ator: 'super-admin',
+      acao: `SaltFood Coins ${participaSaltfoodCoins ? 'ativado' : 'desativado'}${percentValor != null ? ` (${percentValor}%)` : ''}`,
+    });
+    res.json(serializeEmpresa(empresa));
+  } catch (error) {
+    return handlePrismaError(error, res);
+  }
+}));
+
+/**
+ * @openapi
  * /empresas/{id}/comissao-visibilidade:
  *   patch:
  *     summary: Mostra ou oculta o card "Comissão da plataforma" no CRM do próprio tenant
@@ -1364,7 +1422,6 @@ router.put('/:id/frete-config', requireEmpresaAdmin('id'), asyncHandler(async (r
  *               fidelidadeAvisoFaltam: { type: integer, nullable: true }
  *               fidelidadeNomeItem: { type: string, nullable: true }
  *               cashbackPercent: { type: number, nullable: true }
- *               saltfoodCoinsPercent: { type: number, nullable: true }
  *     responses:
  *       200:
  *         description: Configuração atualizada
@@ -1374,7 +1431,7 @@ router.put('/:id/frete-config', requireEmpresaAdmin('id'), asyncHandler(async (r
  *         description: Empresa não encontrada
  */
 router.put('/:id/fidelidade-config', requireEmpresaAdmin('id'), asyncHandler(async (req, res) => {
-  const { fidelidadeLogoUrl, fidelidadeValidadeDias, fidelidadeAvisoFaltam, fidelidadeNomeItem, cashbackPercent, saltfoodCoinsPercent } = req.body;
+  const { fidelidadeLogoUrl, fidelidadeValidadeDias, fidelidadeAvisoFaltam, fidelidadeNomeItem, cashbackPercent } = req.body;
 
   const erros = [];
   if (fidelidadeValidadeDias !== undefined && fidelidadeValidadeDias !== null && fidelidadeValidadeDias !== '') {
@@ -1392,12 +1449,6 @@ router.put('/:id/fidelidade-config', requireEmpresaAdmin('id'), asyncHandler(asy
     const valor = Number(cashbackPercent);
     if (Number.isNaN(valor) || valor < 0 || valor > 100) {
       erros.push('Campo "cashbackPercent" deve ser um número entre 0 e 100');
-    }
-  }
-  if (saltfoodCoinsPercent !== undefined && saltfoodCoinsPercent !== null && saltfoodCoinsPercent !== '') {
-    const valor = Number(saltfoodCoinsPercent);
-    if (Number.isNaN(valor) || valor < 0 || valor > 100) {
-      erros.push('Campo "saltfoodCoinsPercent" deve ser um número entre 0 e 100');
     }
   }
   if (erros.length) {
@@ -1419,9 +1470,6 @@ router.put('/:id/fidelidade-config', requireEmpresaAdmin('id'), asyncHandler(asy
         ...(cashbackPercent !== undefined
           ? { cashbackPercent: cashbackPercent === null || cashbackPercent === '' ? null : Number(cashbackPercent) }
           : {}),
-        ...(saltfoodCoinsPercent !== undefined
-          ? { saltfoodCoinsPercent: saltfoodCoinsPercent === null || saltfoodCoinsPercent === '' ? null : Number(saltfoodCoinsPercent) }
-          : {}),
       },
     });
     res.json(serializeEmpresa(empresa));
@@ -1430,11 +1478,13 @@ router.put('/:id/fidelidade-config', requireEmpresaAdmin('id'), asyncHandler(asy
   }
 }));
 
+// SaltFood Coins (participaSaltfoodCoins/saltfoodCoinsPercent) fica fora desta lista de propósito
+// — diferente das demais funcionalidades opt-in, só o Super Admin ativa (ver PATCH /:id/saltfood-coins),
+// porque envolve exposição financeira entre lojas diferentes, não é uma escolha isolada do lojista.
 const CAMPOS_FUNCIONALIDADES = [
   'habilitarFavoritos', 'habilitarPedirDeNovo', 'habilitarRankingFidelidade',
   'habilitarAgendamento', 'habilitarAvaliacaoComFotos', 'habilitarNotificacoesInApp',
   'habilitarMissoes', 'habilitarIndicacaoAvancada', 'habilitarAvaliacaoDetalhada', 'habilitarCentralSuporte',
-  'participaSaltfoodCoins',
 ];
 
 /**
