@@ -7,7 +7,7 @@ const { calcularFrete } = require('../lib/calcularFrete');
 const { disponibilidadeFidelidade, creditarUnidadesFidelidade } = require('../lib/fidelidade');
 const { RECOMPENSA_INDICACAO_UNIDADES, bonusPorMarco } = require('../lib/indicacao');
 const { creditarCashback } = require('../lib/cashback');
-const { creditarCoins } = require('../lib/coins');
+const { creditarCoins, debitarCoins } = require('../lib/coins');
 const { notificarPedido } = require('../lib/pushNotifications');
 const { criarNotificacaoCliente } = require('../lib/notificacoesCliente');
 const { requireEmpresaAdmin, requireCliente } = require('../lib/auth');
@@ -203,7 +203,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
 router.post('/', asyncHandler(async (req, res) => {
   const {
     clienteNome, clienteTelefone, endereco, bairro, referencia,
-    formaPagamento, trocoPara, observacoes, itens, usarItemGratis, cupomCodigo, agendadoPara, usarCashback,
+    formaPagamento, trocoPara, observacoes, itens, usarItemGratis, cupomCodigo, agendadoPara, usarCashback, usarCoins,
   } = req.body;
 
   // Checkout aceita convidado (sem login) — clienteId nunca vem do corpo da requisição, só do
@@ -391,77 +391,123 @@ router.post('/', asyncHandler(async (req, res) => {
     subtotal = Math.max(0, subtotal - cashbackUsadoValor);
   }
 
+  // SaltFood Coins — em paralelo ao cashback local acima, aplicado depois dele sobre o subtotal
+  // já reduzido. Diferente do cashback (isolado por loja), o saldo de coins é compartilhado entre
+  // lojas, então a checagem definitiva de saldo acontece de novo dentro da transação (debitarCoins),
+  // não só aqui — evita gasto duplo em dois pedidos simultâneos em lojas diferentes.
+  let coinsUsadoValor = 0;
+  if (usarCoins) {
+    if (!req.empresa.participaSaltfoodCoins) {
+      return res.status(400).json({ error: 'Esta loja não participa do SaltFood Coins' });
+    }
+    if (!cliente) {
+      return res.status(400).json({ error: 'É preciso estar logado para usar o saldo de SaltFood Coins' });
+    }
+    if (!cliente.contaPlataformaId) {
+      return res.status(400).json({ error: 'Você ainda não tem uma conta SaltFood Coins vinculada' });
+    }
+    const valorSolicitado = Number(usarCoins);
+    if (!Number.isFinite(valorSolicitado) || valorSolicitado <= 0) {
+      return res.status(400).json({ error: 'Campo "usarCoins" deve ser um valor maior que zero' });
+    }
+    const contaPlataforma = await prisma.contaPlataforma.findUnique({ where: { id: cliente.contaPlataformaId } });
+    if (!contaPlataforma || valorSolicitado > Number(contaPlataforma.saldoCoins)) {
+      return res.status(400).json({ error: 'Saldo de SaltFood Coins insuficiente' });
+    }
+    coinsUsadoValor = Math.min(valorSolicitado, subtotal);
+    subtotal = Math.max(0, subtotal - coinsUsadoValor);
+  }
+
   const total = subtotal + taxaEntregaFinal;
 
-  const pedido = await prisma.$transaction(async (tx) => {
-    const ultimo = await tx.pedido.findFirst({
-      where: { empresaId: req.params.empresaId },
-      orderBy: { numero: 'desc' },
-      select: { numero: true },
-    });
-    const numero = (ultimo?.numero ?? 0) + 1;
-
-    const criado = await tx.pedido.create({
-      data: {
-        empresaId: req.params.empresaId,
-        numero,
-        clienteNome,
-        clienteTelefone,
-        endereco,
-        bairro: bairro || null,
-        referencia: referencia || null,
-        subtotal,
-        taxaEntrega: taxaEntregaFinal,
-        total,
-        formaPagamento,
-        trocoPara: trocoPara || null,
-        observacoes: observacoes || null,
-        agendadoPara: agendadoParaData,
-        userAgent: req.headers['user-agent']?.slice(0, 300) || null,
-        clienteId: cliente?.id || null,
-        itemGratisResgatado: resgatouItemGratis,
-        cupomId: cupomAplicado?.id || null,
-        cupomCodigo: cupomAplicado?.codigo || null,
-        descontoCupom,
-        cashbackUsado: cashbackUsadoValor > 0 ? cashbackUsadoValor : null,
-        itens: { create: itensParaCriar },
-      },
-      include: { itens: { include: { opcoesSelecionadas: true } }, motoboy: { select: { id: true, nome: true, latitudeAtual: true, longitudeAtual: true, localizacaoAtualizadaEm: true } } },
-    });
-
-    if (resgatouItemGratis) {
-      await tx.cliente.update({
-        where: { id: cliente.id },
-        data: { itensGratisResgatados: { increment: 1 } },
+  let pedido;
+  try {
+    pedido = await prisma.$transaction(async (tx) => {
+      const ultimo = await tx.pedido.findFirst({
+        where: { empresaId: req.params.empresaId },
+        orderBy: { numero: 'desc' },
+        select: { numero: true },
       });
-    }
+      const numero = (ultimo?.numero ?? 0) + 1;
 
-    if (cashbackUsadoValor > 0) {
-      await tx.cliente.update({
-        where: { id: cliente.id },
-        data: { saldoCashback: { decrement: cashbackUsadoValor } },
+      const criado = await tx.pedido.create({
+        data: {
+          empresaId: req.params.empresaId,
+          numero,
+          clienteNome,
+          clienteTelefone,
+          endereco,
+          bairro: bairro || null,
+          referencia: referencia || null,
+          subtotal,
+          taxaEntrega: taxaEntregaFinal,
+          total,
+          formaPagamento,
+          trocoPara: trocoPara || null,
+          observacoes: observacoes || null,
+          agendadoPara: agendadoParaData,
+          userAgent: req.headers['user-agent']?.slice(0, 300) || null,
+          clienteId: cliente?.id || null,
+          itemGratisResgatado: resgatouItemGratis,
+          cupomId: cupomAplicado?.id || null,
+          cupomCodigo: cupomAplicado?.codigo || null,
+          descontoCupom,
+          cashbackUsado: cashbackUsadoValor > 0 ? cashbackUsadoValor : null,
+          coinsUsado: coinsUsadoValor > 0 ? coinsUsadoValor : null,
+          itens: { create: itensParaCriar },
+        },
+        include: { itens: { include: { opcoesSelecionadas: true } }, motoboy: { select: { id: true, nome: true, latitudeAtual: true, longitudeAtual: true, localizacaoAtualizadaEm: true } } },
       });
-    }
 
-    if (cupomAplicado) {
-      await tx.cupom.update({
-        where: { id: cupomAplicado.id },
-        data: { usosRealizados: { increment: 1 } },
-      });
-    }
-
-    for (const item of itensParaCriar) {
-      const produto = produtoPorId.get(item.produtoId);
-      if (produto.controlarEstoque) {
-        await tx.produto.update({
-          where: { id: produto.id },
-          data: { estoqueQtd: Math.max(0, (produto.estoqueQtd ?? 0) - item.quantidade) },
+      if (resgatouItemGratis) {
+        await tx.cliente.update({
+          where: { id: cliente.id },
+          data: { itensGratisResgatados: { increment: 1 } },
         });
       }
-    }
 
-    return criado;
-  });
+      if (cashbackUsadoValor > 0) {
+        await tx.cliente.update({
+          where: { id: cliente.id },
+          data: { saldoCashback: { decrement: cashbackUsadoValor } },
+        });
+      }
+
+      if (coinsUsadoValor > 0) {
+        await debitarCoins(tx, {
+          contaPlataformaId: cliente.contaPlataformaId,
+          empresaId: req.params.empresaId,
+          clienteId: cliente.id,
+          pedidoId: criado.id,
+          valor: coinsUsadoValor,
+        });
+      }
+
+      if (cupomAplicado) {
+        await tx.cupom.update({
+          where: { id: cupomAplicado.id },
+          data: { usosRealizados: { increment: 1 } },
+        });
+      }
+
+      for (const item of itensParaCriar) {
+        const produto = produtoPorId.get(item.produtoId);
+        if (produto.controlarEstoque) {
+          await tx.produto.update({
+            where: { id: produto.id },
+            data: { estoqueQtd: Math.max(0, (produto.estoqueQtd ?? 0) - item.quantidade) },
+          });
+        }
+      }
+
+      return criado;
+    });
+  } catch (error) {
+    if (error.message === 'SALDO_COINS_INSUFICIENTE') {
+      return res.status(400).json({ error: 'Saldo de SaltFood Coins insuficiente' });
+    }
+    throw error;
+  }
 
   res.status(201).json(pedido);
 }));

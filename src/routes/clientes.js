@@ -29,6 +29,16 @@ const garantirCodigoIndicacao = async (cliente) => {
   return prisma.cliente.update({ where: { id: cliente.id }, data: { codigoIndicacao } });
 };
 
+/** Saldo de SaltFood Coins da conta de plataforma vinculada (0 se o cliente ainda não tiver uma) — mesmo formato plano de saldoCashback. */
+const saldoCoinsDe = async (cliente) => {
+  if (!cliente.contaPlataformaId) return 0;
+  const conta = await prisma.contaPlataforma.findUnique({
+    where: { id: cliente.contaPlataformaId },
+    select: { saldoCoins: true },
+  });
+  return conta ? Number(conta.saldoCoins) : 0;
+};
+
 /**
  * @openapi
  * components:
@@ -125,7 +135,7 @@ router.post('/signup', asyncHandler(async (req, res) => {
   }
 
   const token = signToken({ role: 'CLIENTE', empresaId: req.params.empresaId, clienteId: cliente.id }, CLIENTE_TOKEN_TTL);
-  res.status(201).json({ ...serializeCliente(cliente), token, contaPlataformaDetectada });
+  res.status(201).json({ ...serializeCliente(cliente), token, contaPlataformaDetectada, saldoCoinsPlataforma: await saldoCoinsDe(cliente) });
 }));
 
 /**
@@ -184,7 +194,7 @@ router.post('/login', asyncHandler(async (req, res) => {
   }
 
   const token = signToken({ role: 'CLIENTE', empresaId: req.params.empresaId, clienteId: cliente.id }, CLIENTE_TOKEN_TTL);
-  res.json({ ...serializeCliente(clienteComCodigo), token, contaPlataformaDetectada });
+  res.json({ ...serializeCliente(clienteComCodigo), token, contaPlataformaDetectada, saldoCoinsPlataforma: await saldoCoinsDe(clienteComCodigo) });
 }));
 
 /**
@@ -245,7 +255,7 @@ router.get('/:id', requireCliente('id'), asyncHandler(async (req, res) => {
     contaPlataformaDetectada = Boolean(await buscarContaPorEmail(prisma, clienteComCodigo.email));
   }
 
-  res.json({ ...serializeCliente(clienteComCodigo), contaPlataformaDetectada });
+  res.json({ ...serializeCliente(clienteComCodigo), contaPlataformaDetectada, saldoCoinsPlataforma: await saldoCoinsDe(clienteComCodigo) });
 }));
 
 /**
@@ -328,7 +338,7 @@ router.post('/:id/vincular-conta-plataforma', requireCliente('id'), asyncHandler
     data: { contaPlataformaId: conta.id },
   });
 
-  res.json({ ...serializeCliente(cliente), contaPlataformaDetectada: false });
+  res.json({ ...serializeCliente(cliente), contaPlataformaDetectada: false, saldoCoinsPlataforma: await saldoCoinsDe(cliente) });
 }));
 
 /**
