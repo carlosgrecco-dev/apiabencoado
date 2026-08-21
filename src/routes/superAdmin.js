@@ -271,4 +271,87 @@ router.get('/saltfood-coins', requireSuperAdmin, asyncHandler(async (req, res) =
   });
 }));
 
+/**
+ * @openapi
+ * /super-admin/saltfood-coins/movimentos:
+ *   get:
+ *     summary: Ledger do SaltFood Coins — últimos ganhos/gastos, com loja, cliente e pedido de origem
+ *     tags: [SuperAdmin]
+ *     parameters:
+ *       - in: query
+ *         name: empresaId
+ *         schema: { type: string, format: uuid }
+ *       - in: query
+ *         name: tipo
+ *         schema: { type: string, enum: [GANHO, GASTO] }
+ *       - in: query
+ *         name: de
+ *         schema: { type: string, format: date }
+ *       - in: query
+ *         name: ate
+ *         schema: { type: string, format: date }
+ *     responses:
+ *       200:
+ *         description: Últimas 200 movimentações que casam com o filtro
+ */
+router.get('/saltfood-coins/movimentos', requireSuperAdmin, asyncHandler(async (req, res) => {
+  const { empresaId, tipo, de, ate } = req.query;
+  const range = {
+    gte: de ? new Date(`${de}T00:00:00`) : undefined,
+    lte: ate ? new Date(`${ate}T23:59:59`) : undefined,
+  };
+
+  const movimentos = await prisma.coinsMovimento.findMany({
+    where: {
+      ...(empresaId ? { empresaId } : {}),
+      ...(tipo === 'GANHO' || tipo === 'GASTO' ? { tipo } : {}),
+      createdAt: range,
+    },
+    include: {
+      empresa: { select: { id: true, nome: true, slug: true } },
+      cliente: { select: { id: true, nome: true, email: true } },
+      pedido: { select: { id: true, numero: true } },
+    },
+    orderBy: { createdAt: 'desc' },
+    take: 200,
+  });
+
+  res.json(movimentos);
+}));
+
+/**
+ * @openapi
+ * /super-admin/saltfood-coins/contas:
+ *   get:
+ *     summary: Contas de plataforma do SaltFood Coins — saldo e em quais lojas cada cliente está vinculado
+ *     tags: [SuperAdmin]
+ *     parameters:
+ *       - in: query
+ *         name: q
+ *         schema: { type: string }
+ *         description: Filtra por e-mail (contém)
+ *     responses:
+ *       200:
+ *         description: Até 200 contas, saldo decrescente
+ */
+router.get('/saltfood-coins/contas', requireSuperAdmin, asyncHandler(async (req, res) => {
+  const { q } = req.query;
+
+  const contas = await prisma.contaPlataforma.findMany({
+    where: q ? { email: { contains: q, mode: 'insensitive' } } : undefined,
+    select: {
+      id: true,
+      email: true,
+      telefone: true,
+      saldoCoins: true,
+      createdAt: true,
+      clientes: { select: { id: true, nome: true, empresa: { select: { id: true, nome: true } } } },
+    },
+    orderBy: { saldoCoins: 'desc' },
+    take: 200,
+  });
+
+  res.json(contas);
+}));
+
 module.exports = router;
