@@ -514,6 +514,8 @@ router.get('/slug/:slug', asyncHandler(async (req, res) => {
       fidelidadeAvisoFaltam: true,
       fidelidadeNomeItem: true,
       cashbackPercent: true,
+      participaSaltfoodCoins: true,
+      saltfoodCoinsPercent: true,
       habilitarFavoritos: true,
       habilitarPedirDeNovo: true,
       habilitarRankingFidelidade: true,
