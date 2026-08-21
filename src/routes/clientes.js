@@ -5,6 +5,7 @@ const loadEmpresa = require('../lib/loadEmpresa');
 const { disponibilidadeFidelidade, creditarUnidadesFidelidade } = require('../lib/fidelidade');
 const { gerarCodigoIndicacaoUnico } = require('../lib/indicacao');
 const { signToken, requireEmpresaAdmin, requireCliente } = require('../lib/auth');
+const { criarContaIsolada, buscarContaPorEmail, confirmarVinculo } = require('../lib/contaPlataforma');
 
 const router = Router({ mergeParams: true });
 
@@ -106,12 +107,25 @@ router.post('/signup', asyncHandler(async (req, res) => {
 
   const codigoIndicacao = await gerarCodigoIndicacaoUnico(req.params.empresaId);
   const senhaHash = await bcrypt.hash(senha, SALT_ROUNDS);
-  const cliente = await prisma.cliente.create({
+  let cliente = await prisma.cliente.create({
     data: { empresaId: req.params.empresaId, nome, telefone: telefone || null, email, senhaHash, codigoIndicacao, indicadoPorId },
   });
 
+  // SaltFood Coins: se ninguém mais usa este e-mail ainda, a conta de plataforma nasce junto, sem
+  // fricção nenhuma. Se já existe uma (de outra loja), NÃO vincula sozinho — só por bater o
+  // e-mail não prova que é a mesma pessoa (ver contaPlataforma.js). O front oferece vincular
+  // depois, com confirmação de senha.
+  let contaPlataformaDetectada = false;
+  const contaExistente = await buscarContaPorEmail(prisma, email);
+  if (!contaExistente) {
+    const novaConta = await criarContaIsolada(prisma, { email, telefone, senhaHash });
+    cliente = await prisma.cliente.update({ where: { id: cliente.id }, data: { contaPlataformaId: novaConta.id } });
+  } else {
+    contaPlataformaDetectada = true;
+  }
+
   const token = signToken({ role: 'CLIENTE', empresaId: req.params.empresaId, clienteId: cliente.id }, CLIENTE_TOKEN_TTL);
-  res.status(201).json({ ...serializeCliente(cliente), token });
+  res.status(201).json({ ...serializeCliente(cliente), token, contaPlataformaDetectada });
 }));
 
 /**
@@ -160,8 +174,17 @@ router.post('/login', asyncHandler(async (req, res) => {
   }
 
   const clienteComCodigo = await garantirCodigoIndicacao(cliente);
+
+  // Self-heal: cliente criado antes de existir SaltFood Coins, ou que nunca vinculou — avisa se
+  // já existe uma conta de plataforma pra este e-mail, mas não vincula sozinho (login só prova a
+  // senha desta loja, não da conta de outra loja).
+  let contaPlataformaDetectada = false;
+  if (!clienteComCodigo.contaPlataformaId) {
+    contaPlataformaDetectada = Boolean(await buscarContaPorEmail(prisma, email));
+  }
+
   const token = signToken({ role: 'CLIENTE', empresaId: req.params.empresaId, clienteId: cliente.id }, CLIENTE_TOKEN_TTL);
-  res.json({ ...serializeCliente(clienteComCodigo), token });
+  res.json({ ...serializeCliente(clienteComCodigo), token, contaPlataformaDetectada });
 }));
 
 /**
@@ -216,7 +239,13 @@ router.get('/:id', requireCliente('id'), asyncHandler(async (req, res) => {
     return res.status(404).json({ error: 'Cliente não encontrado' });
   }
   const clienteComCodigo = await garantirCodigoIndicacao(cliente);
-  res.json(serializeCliente(clienteComCodigo));
+
+  let contaPlataformaDetectada = false;
+  if (!clienteComCodigo.contaPlataformaId) {
+    contaPlataformaDetectada = Boolean(await buscarContaPorEmail(prisma, clienteComCodigo.email));
+  }
+
+  res.json({ ...serializeCliente(clienteComCodigo), contaPlataformaDetectada });
 }));
 
 /**
@@ -245,6 +274,61 @@ router.get('/:id/pedidos', requireCliente('id'), asyncHandler(async (req, res) =
     orderBy: { createdAt: 'desc' },
   });
   res.json(pedidos);
+}));
+
+/**
+ * @openapi
+ * /empresas/{empresaId}/clientes/{id}/vincular-conta-plataforma:
+ *   post:
+ *     summary: Vincula o cliente a uma conta SaltFood Coins existente de outra loja, confirmando com a senha de lá
+ *     tags: [Clientes]
+ *     parameters:
+ *       - in: path
+ *         name: empresaId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [email, senha]
+ *             properties:
+ *               email: { type: string }
+ *               senha: { type: string }
+ *     responses:
+ *       200:
+ *         description: Contas vinculadas
+ *       400:
+ *         description: Nenhuma conta encontrada, ou senha não confere
+ */
+router.post('/:id/vincular-conta-plataforma', requireCliente('id'), asyncHandler(async (req, res) => {
+  const { email, senha } = req.body;
+  if (!email || !senha) {
+    return res.status(400).json({ error: 'Campos "email" e "senha" são obrigatórios' });
+  }
+
+  const conta = await buscarContaPorEmail(prisma, email);
+  if (!conta) {
+    return res.status(400).json({ error: 'Nenhuma conta SaltFood encontrada com este e-mail' });
+  }
+
+  const senhaConfere = await confirmarVinculo(prisma, conta.id, senha);
+  if (!senhaConfere) {
+    return res.status(400).json({ error: 'Senha incorreta' });
+  }
+
+  const cliente = await prisma.cliente.update({
+    where: { id: req.params.id },
+    data: { contaPlataformaId: conta.id },
+  });
+
+  res.json({ ...serializeCliente(cliente), contaPlataformaDetectada: false });
 }));
 
 /**

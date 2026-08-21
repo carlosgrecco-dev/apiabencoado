@@ -1364,6 +1364,7 @@ router.put('/:id/frete-config', requireEmpresaAdmin('id'), asyncHandler(async (r
  *               fidelidadeAvisoFaltam: { type: integer, nullable: true }
  *               fidelidadeNomeItem: { type: string, nullable: true }
  *               cashbackPercent: { type: number, nullable: true }
+ *               saltfoodCoinsPercent: { type: number, nullable: true }
  *     responses:
  *       200:
  *         description: Configuração atualizada
@@ -1373,7 +1374,7 @@ router.put('/:id/frete-config', requireEmpresaAdmin('id'), asyncHandler(async (r
  *         description: Empresa não encontrada
  */
 router.put('/:id/fidelidade-config', requireEmpresaAdmin('id'), asyncHandler(async (req, res) => {
-  const { fidelidadeLogoUrl, fidelidadeValidadeDias, fidelidadeAvisoFaltam, fidelidadeNomeItem, cashbackPercent } = req.body;
+  const { fidelidadeLogoUrl, fidelidadeValidadeDias, fidelidadeAvisoFaltam, fidelidadeNomeItem, cashbackPercent, saltfoodCoinsPercent } = req.body;
 
   const erros = [];
   if (fidelidadeValidadeDias !== undefined && fidelidadeValidadeDias !== null && fidelidadeValidadeDias !== '') {
@@ -1391,6 +1392,12 @@ router.put('/:id/fidelidade-config', requireEmpresaAdmin('id'), asyncHandler(asy
     const valor = Number(cashbackPercent);
     if (Number.isNaN(valor) || valor < 0 || valor > 100) {
       erros.push('Campo "cashbackPercent" deve ser um número entre 0 e 100');
+    }
+  }
+  if (saltfoodCoinsPercent !== undefined && saltfoodCoinsPercent !== null && saltfoodCoinsPercent !== '') {
+    const valor = Number(saltfoodCoinsPercent);
+    if (Number.isNaN(valor) || valor < 0 || valor > 100) {
+      erros.push('Campo "saltfoodCoinsPercent" deve ser um número entre 0 e 100');
     }
   }
   if (erros.length) {
@@ -1412,6 +1419,9 @@ router.put('/:id/fidelidade-config', requireEmpresaAdmin('id'), asyncHandler(asy
         ...(cashbackPercent !== undefined
           ? { cashbackPercent: cashbackPercent === null || cashbackPercent === '' ? null : Number(cashbackPercent) }
           : {}),
+        ...(saltfoodCoinsPercent !== undefined
+          ? { saltfoodCoinsPercent: saltfoodCoinsPercent === null || saltfoodCoinsPercent === '' ? null : Number(saltfoodCoinsPercent) }
+          : {}),
       },
     });
     res.json(serializeEmpresa(empresa));
@@ -1424,6 +1434,7 @@ const CAMPOS_FUNCIONALIDADES = [
   'habilitarFavoritos', 'habilitarPedirDeNovo', 'habilitarRankingFidelidade',
   'habilitarAgendamento', 'habilitarAvaliacaoComFotos', 'habilitarNotificacoesInApp',
   'habilitarMissoes', 'habilitarIndicacaoAvancada', 'habilitarAvaliacaoDetalhada', 'habilitarCentralSuporte',
+  'participaSaltfoodCoins',
 ];
 
 /**

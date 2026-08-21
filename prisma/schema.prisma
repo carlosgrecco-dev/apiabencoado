@@ -76,6 +76,11 @@ model Empresa {
   /// Percentual de cashback (0-100) creditado no saldo do cliente sobre o subtotal de cada pedido ENTREGUE. 0/null = desativado.
   cashbackPercent Decimal? @map("cashback_percent") @db.Decimal(5, 2)
 
+  /// SaltFood Coins — opt-in por loja pra participar da carteira global (ganhar e/ou gastar),
+  /// independente do cashback local acima. Percentual sobre o subtotal, igual ao cashback.
+  participaSaltfoodCoins Boolean  @default(false) @map("participa_saltfood_coins")
+  saltfoodCoinsPercent   Decimal? @map("saltfood_coins_percent") @db.Decimal(5, 2)
+
   // Funcionalidades da loja (opt-in) — cada função só fica visível/ativa na vitrine depois que o
   // próprio tenant aprova e liga aqui no admin dele. Todas nascem desligadas por padrão.
   habilitarFavoritos           Boolean @default(false) @map("habilitar_favoritos")
@@ -119,6 +124,7 @@ model Empresa {
   categorias        Categoria[]
   missoes           Missao[]
   ticketsSuporte    TicketSuporte[]
+  movimentosCoins   CoinsMovimento[]
 
   planoId String? @map("plano_id") @db.Uuid
   plano   Plano?  @relation(fields: [planoId], references: [id], onDelete: SetNull)
@@ -294,6 +300,12 @@ model Cliente {
   /// Saldo de cashback em R$, creditado (Empresa.cashbackPercent sobre o subtotal) quando um pedido é ENTREGUE, e debitado quando usado como desconto num pedido futuro.
   saldoCashback Decimal @default(0) @map("saldo_cashback") @db.Decimal(10, 2)
 
+  /// Vínculo com a identidade de plataforma (SaltFood Coins) — null até o cliente vincular
+  /// explicitamente com confirmação de senha (ver api/src/lib/contaPlataforma.js). Nunca é
+  /// preenchido automaticamente só por bater o e-mail, pra não permitir herdar saldo alheio.
+  contaPlataformaId String?          @map("conta_plataforma_id") @db.Uuid
+  contaPlataforma   ContaPlataforma? @relation(fields: [contaPlataformaId], references: [id], onDelete: SetNull)
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -304,10 +316,57 @@ model Cliente {
   notificacoes    NotificacaoCliente[]
   missoes         MissaoCliente[]
   ticketsSuporte  TicketSuporte[]
+  movimentosCoins CoinsMovimento[]
 
   @@unique([empresaId, email])
   @@unique([empresaId, codigoIndicacao])
   @@map("clientes")
+}
+
+/// Identidade de plataforma (SaltFood Coins) — primeiro model verdadeiramente global do schema,
+/// sem empresaId. Cada Cliente (que continua por loja, login/senha próprios) pode se vincular a
+/// uma destas pra compartilhar saldo entre lojas. Vínculo exige confirmação de senha (ver
+/// api/src/lib/contaPlataforma.js) — nunca é automático só por bater o e-mail.
+model ContaPlataforma {
+  id         String   @id @default(uuid()) @db.Uuid
+  email      String   @unique
+  telefone   String?
+  /// Hash da senha do primeiro Cliente que criou esta conta — usado só pra confirmar vínculo de
+  /// outra loja (comparado com bcrypt), nunca pra autenticar login diretamente.
+  senhaHash  String   @map("senha_hash")
+  saldoCoins Decimal  @default(0) @map("saldo_coins") @db.Decimal(10, 2)
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  clientes        Cliente[]
+  movimentosCoins CoinsMovimento[]
+
+  @@map("contas_plataforma")
+}
+
+enum TipoCoinsMovimento {
+  GANHO
+  GASTO
+}
+
+/// Ledger de SaltFood Coins — ao contrário de Cliente.saldoCashback (só um Decimal que sobe/desce
+/// sem histórico), aqui toda variação de saldo gera uma linha, porque o saldo é compartilhado
+/// entre lojas (ganho numa, gasto noutra) e precisa de trilha auditável.
+model CoinsMovimento {
+  id                String             @id @default(uuid()) @db.Uuid
+  contaPlataformaId String             @map("conta_plataforma_id") @db.Uuid
+  contaPlataforma   ContaPlataforma    @relation(fields: [contaPlataformaId], references: [id], onDelete: Cascade)
+  empresaId         String             @map("empresa_id") @db.Uuid
+  empresa           Empresa            @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  clienteId         String             @map("cliente_id") @db.Uuid
+  cliente           Cliente            @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  pedidoId          String?            @map("pedido_id") @db.Uuid
+  pedido            Pedido?            @relation(fields: [pedidoId], references: [id], onDelete: SetNull)
+  tipo              TipoCoinsMovimento
+  valor             Decimal            @db.Decimal(10, 2)
+  createdAt         DateTime           @default(now()) @map("created_at")
+
+  @@map("coins_movimentos")
 }
 
 /// Produto favoritado por um cliente, pra achar rápido de novo na loja.
@@ -594,6 +653,11 @@ model Pedido {
   cashbackUsado      Decimal? @map("cashback_usado") @db.Decimal(10, 2)
   cashbackCreditado  Decimal? @map("cashback_creditado") @db.Decimal(10, 2) // preenchido 1x ao entregar, evita crédito duplicado
 
+  // SaltFood Coins: mesmo padrão do cashback acima, mas gravado também no ledger CoinsMovimento
+  // (ver abaixo), já que o saldo é compartilhado entre lojas.
+  coinsUsado     Decimal? @map("coins_usado") @db.Decimal(10, 2)
+  coinsCreditado Decimal? @map("coins_creditado") @db.Decimal(10, 2)
+
   // Cupom aplicado (snapshot do código, pois o cupom pode mudar/expirar depois)
   cupomId        String?  @map("cupom_id") @db.Uuid
   cupom          Cupom?   @relation(fields: [cupomId], references: [id], onDelete: SetNull)
@@ -623,6 +687,7 @@ model Pedido {
   itens             PedidoItem[]
   pushSubscriptions PushSubscription[]
   ticketsSuporte    TicketSuporte[]
+  movimentosCoins   CoinsMovimento[]
 
   @@unique([empresaId, numero])
   @@map("pedidos")

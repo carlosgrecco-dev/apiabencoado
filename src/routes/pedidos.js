@@ -7,6 +7,7 @@ const { calcularFrete } = require('../lib/calcularFrete');
 const { disponibilidadeFidelidade, creditarUnidadesFidelidade } = require('../lib/fidelidade');
 const { RECOMPENSA_INDICACAO_UNIDADES, bonusPorMarco } = require('../lib/indicacao');
 const { creditarCashback } = require('../lib/cashback');
+const { creditarCoins } = require('../lib/coins');
 const { notificarPedido } = require('../lib/pushNotifications');
 const { criarNotificacaoCliente } = require('../lib/notificacoesCliente');
 const { requireEmpresaAdmin, requireCliente } = require('../lib/auth');
@@ -587,6 +588,33 @@ router.patch('/:id/status', asyncHandler(async (req, res, next) => {
           data: { cashbackCreditado: valorCashback },
         });
         salvo = { ...salvo, cashbackCreditado: valorCashback };
+      }
+
+      // Credita SaltFood Coins sobre o subtotal (1x por pedido, guardado por coinsCreditado) —
+      // só se a loja participar (opt-in) e o cliente já tiver uma conta de plataforma vinculada.
+      // Em paralelo ao cashback local acima, sem interferir nele.
+      const coinsPercent = req.empresa.participaSaltfoodCoins && req.empresa.saltfoodCoinsPercent
+        ? Number(req.empresa.saltfoodCoinsPercent) : 0;
+      if (salvo.clienteId && coinsPercent > 0 && salvo.coinsCreditado == null) {
+        const clienteConta = await tx.cliente.findUnique({
+          where: { id: salvo.clienteId },
+          select: { contaPlataformaId: true },
+        });
+        if (clienteConta?.contaPlataformaId) {
+          const valorCoins = Number(salvo.subtotal) * (coinsPercent / 100);
+          await creditarCoins(tx, {
+            contaPlataformaId: clienteConta.contaPlataformaId,
+            empresaId: req.params.empresaId,
+            clienteId: salvo.clienteId,
+            pedidoId: salvo.id,
+            valor: valorCoins,
+          });
+          await tx.pedido.update({
+            where: { id: salvo.id },
+            data: { coinsCreditado: valorCoins },
+          });
+          salvo = { ...salvo, coinsCreditado: valorCoins };
+        }
       }
 
       // Indicação: se esse pedido é a primeira compra concluída de um cliente indicado por
