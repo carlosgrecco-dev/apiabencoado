@@ -615,7 +615,7 @@ router.get('/:id', requireEmpresaAdmin('id'), asyncHandler(async (req, res) => {
 router.post('/', requireSuperAdmin, asyncHandler(async (req, res) => {
   const {
     nome, responsavelNome, email, telefone, documento, slug, usuario, senha,
-    empresaAtiva, adminAtivo, planoId, comissaoPercent, indicadoPor,
+    empresaAtiva, adminAtivo, planoId, comissaoPercent, indicadoPor, ehDemo,
   } = req.body;
 
   const erros = validarPayload(req.body);
@@ -669,6 +669,7 @@ router.post('/', requireSuperAdmin, asyncHandler(async (req, res) => {
         senhaHash,
         empresaAtiva: empresaAtiva ?? true,
         adminAtivo: adminAtivo ?? true,
+        ehDemo: ehDemo === true,
         codigoIndicacao,
         indicadaPorEmpresaId,
         ...(plano

@@ -20,6 +20,10 @@ model Empresa {
   adminAtivo      Boolean  @default(true) @map("admin_ativo")
   /// Último login do admin do tenant — usado só pro Super Admin enxergar saúde/atividade da loja, não afeta nenhuma regra de acesso.
   ultimoAcessoAdminEm DateTime? @map("ultimo_acesso_admin_em")
+  /// Loja de demonstração (ex: pra mostrar a plataforma pra um prospect) — funciona igual a qualquer
+  /// tenant real, mas é excluída dos totais agregados do dashboard do Super Admin (GMV, nº de lojas,
+  /// nº de clientes etc.), pra não distorcer os números reais da plataforma.
+  ehDemo Boolean @default(false) @map("eh_demo")
 
   // Perfil da loja (vitrine/admin da empresa)
   descricao             String? // tagline curta, ex: "20 anos de sabor baiano"

@@ -95,18 +95,22 @@ router.get('/dashboard', requireSuperAdmin, asyncHandler(async (req, res) => {
     lte: ate ? new Date(`${ate}T23:59:59`) : undefined,
   };
 
+  // Lojas de demonstração (ehDemo=true) ficam fora de todo agregado da plataforma — funcionam
+  // normalmente (têm pedidos, clientes etc.), mas não podem distorcer GMV/comissão/contagens
+  // reais mostradas aqui pro Super Admin.
   const [totalEmpresas, empresasAtivas, totalClientes, totalMotoboysAtivos, novosTenantsNoPeriodo, entregues, ultimoPedidoPorEmpresa, empresas] = await Promise.all([
-    prisma.empresa.count(),
-    prisma.empresa.count({ where: { empresaAtiva: true } }),
-    prisma.cliente.count(),
-    prisma.motoboy.count({ where: { ativo: true } }),
-    prisma.empresa.count({ where: { createdAt: range } }),
+    prisma.empresa.count({ where: { ehDemo: false } }),
+    prisma.empresa.count({ where: { empresaAtiva: true, ehDemo: false } }),
+    prisma.cliente.count({ where: { empresa: { ehDemo: false } } }),
+    prisma.motoboy.count({ where: { ativo: true, empresa: { ehDemo: false } } }),
+    prisma.empresa.count({ where: { createdAt: range, ehDemo: false } }),
     prisma.pedido.findMany({
-      where: { status: 'ENTREGUE', createdAt: range },
+      where: { status: 'ENTREGUE', createdAt: range, empresa: { ehDemo: false } },
       select: { total: true, empresaId: true, createdAt: true, userAgent: true },
     }),
-    prisma.pedido.groupBy({ by: ['empresaId'], where: { status: 'ENTREGUE' }, _max: { createdAt: true } }),
+    prisma.pedido.groupBy({ by: ['empresaId'], where: { status: 'ENTREGUE', empresa: { ehDemo: false } }, _max: { createdAt: true } }),
     prisma.empresa.findMany({
+      where: { ehDemo: false },
       select: {
         id: true, nome: true, slug: true, empresaAtiva: true, comissaoPercent: true,
         ultimoAcessoAdminEm: true, createdAt: true, cashbackPercent: true,
