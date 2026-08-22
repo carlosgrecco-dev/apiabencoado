@@ -2,6 +2,7 @@ const { Router } = require('express');
 const prisma = require('../lib/prisma');
 const { registrarLog } = require('../lib/auditLog');
 const { requireSuperAdmin } = require('../lib/auth');
+const { CAMPOS_FUNCIONALIDADES } = require('../lib/funcionalidades');
 
 const router = Router();
 
@@ -27,6 +28,9 @@ const validarPayload = ({ nome, comissaoPercent, valorMensal }) => {
   }
   return erros;
 };
+
+/** Pacote de funcionalidades do plano — cada campo ausente do corpo vira false (formulário sempre reenvia o estado inteiro dos checkboxes, não é PATCH parcial). */
+const montarFuncionalidades = (body) => Object.fromEntries(CAMPOS_FUNCIONALIDADES.map((campo) => [campo, body[campo] === true]));
 
 /**
  * @openapi
@@ -83,6 +87,7 @@ router.post('/', asyncHandler(async (req, res) => {
       ...(destaque !== undefined ? { destaque } : {}),
       ...(ativo !== undefined ? { ativo } : {}),
       ...(ordem !== undefined ? { ordem } : {}),
+      ...montarFuncionalidades(req.body),
     },
   });
 
@@ -129,6 +134,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
         ...(destaque !== undefined ? { destaque } : {}),
         ...(ativo !== undefined ? { ativo } : {}),
         ...(ordem !== undefined ? { ordem } : {}),
+        ...montarFuncionalidades(req.body),
       },
     });
     await registrarLog({ tipo: 'ALTERACAO_CRITICA', ator: 'super-admin', acao: `Plano "${plano.nome}" atualizado`, detalhes: plano });

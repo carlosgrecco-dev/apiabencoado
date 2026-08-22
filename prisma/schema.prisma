@@ -154,6 +154,21 @@ model Plano {
   /// Marca o plano com o selo "Mais Popular" na listagem.
   destaque Boolean @default(false)
 
+  /// Pacote de funcionalidades incluídas no plano — sincronizado pra Empresa quando o Super
+  /// Admin atribui este plano a uma loja (PATCH /empresas/:id/plano). Mesmos 10 campos que
+  /// Empresa já tem; o Super Admin ainda pode ligar/desligar um campo pontual numa loja depois,
+  /// como exceção, sem precisar trocar o plano dela.
+  habilitarFavoritos          Boolean @default(false) @map("habilitar_favoritos")
+  habilitarPedirDeNovo        Boolean @default(false) @map("habilitar_pedir_de_novo")
+  habilitarRankingFidelidade  Boolean @default(false) @map("habilitar_ranking_fidelidade")
+  habilitarAgendamento        Boolean @default(false) @map("habilitar_agendamento")
+  habilitarAvaliacaoComFotos  Boolean @default(false) @map("habilitar_avaliacao_com_fotos")
+  habilitarNotificacoesInApp  Boolean @default(false) @map("habilitar_notificacoes_in_app")
+  habilitarMissoes            Boolean @default(false) @map("habilitar_missoes")
+  habilitarIndicacaoAvancada  Boolean @default(false) @map("habilitar_indicacao_avancada")
+  habilitarAvaliacaoDetalhada Boolean @default(false) @map("habilitar_avaliacao_detalhada")
+  habilitarCentralSuporte     Boolean @default(false) @map("habilitar_central_suporte")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 

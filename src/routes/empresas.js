@@ -6,6 +6,7 @@ const { registrarLog } = require('../lib/auditLog');
 const { signToken, requireSuperAdmin, requireEmpresaAdmin } = require('../lib/auth');
 const { gerarCodigoIndicacaoEmpresaUnico } = require('../lib/indicacaoEmpresa');
 const { gerarIconePwa, TAMANHOS_VALIDOS } = require('../lib/pwaIcon');
+const { CAMPOS_FUNCIONALIDADES } = require('../lib/funcionalidades');
 
 const ADMIN_TOKEN_TTL = '12h';
 
@@ -1242,11 +1243,15 @@ router.patch('/:id/plano', requireSuperAdmin, asyncHandler(async (req, res) => {
   try {
     const empresa = await prisma.empresa.update({
       where: { id: req.params.id },
-      data: { planoId: plano.id, comissaoPercent: plano.comissaoPercent },
+      data: {
+        planoId: plano.id,
+        comissaoPercent: plano.comissaoPercent,
+        ...Object.fromEntries(CAMPOS_FUNCIONALIDADES.map((campo) => [campo, plano[campo]])),
+      },
     });
     await registrarLog({
       tipo: 'ALTERACAO_CRITICA', empresaId: empresa.id, empresaNome: empresa.nome, ator: 'super-admin',
-      acao: `Plano "${plano.nome}" atribuído (comissão sincronizada para ${plano.comissaoPercent}%)`,
+      acao: `Plano "${plano.nome}" atribuído (comissão e funcionalidades sincronizadas com o pacote do plano)`,
     });
     res.json(serializeEmpresa(empresa));
   } catch (error) {
@@ -1480,20 +1485,11 @@ router.put('/:id/fidelidade-config', requireEmpresaAdmin('id'), asyncHandler(asy
   }
 }));
 
-// SaltFood Coins (participaSaltfoodCoins/saltfoodCoinsPercent) fica fora desta lista de propósito
-// — diferente das demais funcionalidades opt-in, só o Super Admin ativa (ver PATCH /:id/saltfood-coins),
-// porque envolve exposição financeira entre lojas diferentes, não é uma escolha isolada do lojista.
-const CAMPOS_FUNCIONALIDADES = [
-  'habilitarFavoritos', 'habilitarPedirDeNovo', 'habilitarRankingFidelidade',
-  'habilitarAgendamento', 'habilitarAvaliacaoComFotos', 'habilitarNotificacoesInApp',
-  'habilitarMissoes', 'habilitarIndicacaoAvancada', 'habilitarAvaliacaoDetalhada', 'habilitarCentralSuporte',
-];
-
 /**
  * @openapi
  * /empresas/{id}/funcionalidades-config:
  *   put:
- *     summary: Liga/desliga funcionalidades opcionais da loja (favoritos, agendamento, notificações in-app etc.) — cada uma só fica visível na vitrine depois que o tenant aprova aqui.
+ *     summary: Liga/desliga funcionalidades opcionais da loja (favoritos, agendamento, notificações in-app etc.) — exceção pontual numa loja específica, fora do pacote do plano dela. Só o Super Admin.
  *     tags: [Empresas]
  *     parameters:
  *       - in: path
@@ -1525,14 +1521,16 @@ const CAMPOS_FUNCIONALIDADES = [
  *       404:
  *         description: Empresa não encontrada
  */
-router.put('/:id/funcionalidades-config', requireEmpresaAdmin('id'), asyncHandler(async (req, res) => {
+router.put('/:id/funcionalidades-config', requireSuperAdmin, asyncHandler(async (req, res) => {
   const data = {};
+  const camposAlterados = [];
   for (const campo of CAMPOS_FUNCIONALIDADES) {
     if (req.body[campo] !== undefined) {
       if (typeof req.body[campo] !== 'boolean') {
         return res.status(400).json({ error: `Campo "${campo}" deve ser booleano` });
       }
       data[campo] = req.body[campo];
+      camposAlterados.push(`${campo}=${req.body[campo]}`);
     }
   }
   if (req.body.indicacaoRecompensaUnidades !== undefined) {
@@ -1541,10 +1539,15 @@ router.put('/:id/funcionalidades-config', requireEmpresaAdmin('id'), asyncHandle
       return res.status(400).json({ error: 'Campo "indicacaoRecompensaUnidades" deve ser um inteiro maior que zero' });
     }
     data.indicacaoRecompensaUnidades = valor;
+    camposAlterados.push(`indicacaoRecompensaUnidades=${valor}`);
   }
 
   try {
     const empresa = await prisma.empresa.update({ where: { id: req.params.id }, data });
+    await registrarLog({
+      tipo: 'ALTERACAO_CRITICA', empresaId: empresa.id, empresaNome: empresa.nome, ator: 'super-admin',
+      acao: `Funcionalidades ajustadas manualmente (exceção ao plano): ${camposAlterados.join(', ') || 'nenhum campo enviado'}`,
+    });
     res.json(serializeEmpresa(empresa));
   } catch (error) {
     return handlePrismaError(error, res);
