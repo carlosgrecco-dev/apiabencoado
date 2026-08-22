@@ -10,20 +10,6 @@ const asyncHandler = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 const SUPER_ADMIN_TOKEN_TTL = '8h';
 
-// TEMPORÁRIO — diagnóstico de um 401 persistente no login de Super Admin em produção; não expõe a
-// senha/hash inteiro, só booleanos e o prefixo do hash. Remover assim que o problema for resolvido.
-router.get('/_debug-env', (req, res) => {
-  const username = process.env.SUPER_ADMIN_USERNAME;
-  const hash = process.env.SUPER_ADMIN_PASSWORD_HASH;
-  res.json({
-    usernameSet: !!username,
-    username: username || null,
-    hashSet: !!hash,
-    hashLength: hash ? hash.length : 0,
-    hashPrefix: hash ? hash.slice(0, 7) : null,
-  });
-});
-
 /**
  * @openapi
  * /super-admin/login:
