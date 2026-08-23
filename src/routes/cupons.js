@@ -149,7 +149,7 @@ router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
     const cupom = await prisma.cupom.create({
       data: {
         empresaId: req.params.empresaId,
-        codigo: codigo.toUpperCase(),
+        codigo: codigo.trim().toUpperCase(),
         descricao: descricao || null,
         tipo,
         valor: tipo === 'FRETE_GRATIS' ? null : valor,
@@ -218,7 +218,7 @@ router.put('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
     const cupom = await prisma.cupom.update({
       where: { id: req.params.id },
       data: {
-        codigo: codigo.toUpperCase(),
+        codigo: codigo.trim().toUpperCase(),
         descricao: descricao || null,
         tipo,
         valor: tipo === 'FRETE_GRATIS' ? null : valor,

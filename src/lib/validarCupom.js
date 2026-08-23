@@ -16,7 +16,7 @@ async function validarCupom(db, empresaId, codigo, clienteId, subtotal) {
   }
 
   const cupom = await db.cupom.findUnique({
-    where: { empresaId_codigo: { empresaId, codigo: codigo.toUpperCase() } },
+    where: { empresaId_codigo: { empresaId, codigo: codigo.trim().toUpperCase() } },
   });
 
   if (!cupom || !cupom.ativo) {
