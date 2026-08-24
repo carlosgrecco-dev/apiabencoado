@@ -231,6 +231,17 @@ router.post('/', asyncHandler(async (req, res) => {
     agendadoParaData = new Date(agendadoPara);
     if (Number.isNaN(agendadoParaData.getTime()) || agendadoParaData.getTime() <= Date.now()) {
       erros.push('Campo "agendadoPara" precisa ser uma data/hora válida no futuro');
+    } else {
+      // Não deixa agendar pra antes do tempo mínimo de preparo/entrega que a própria loja
+      // configurou (Operacional) — o front já limita isso no seletor, mas revalida aqui pra
+      // ninguém contornar chamando a API direto.
+      const tempoMinimoMin = req.empresa.tempoEstimadoMin ?? req.empresa.tempoEstimadoMax;
+      if (tempoMinimoMin) {
+        const maisCedoPermitido = Date.now() + tempoMinimoMin * 60 * 1000;
+        if (agendadoParaData.getTime() < maisCedoPermitido) {
+          erros.push(`O agendamento precisa ser pelo menos ${tempoMinimoMin} minutos a partir de agora (tempo mínimo de preparo/entrega desta loja)`);
+        }
+      }
     }
   }
 
