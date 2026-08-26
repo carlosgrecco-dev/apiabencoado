@@ -105,6 +105,33 @@ app.get('/', (req, res) => {
  *                   type: string
  *                   example: pong
  */
+/**
+ * @openapi
+ * /app-version:
+ *   get:
+ *     summary: Versão atual e mínima suportada do app Flutter (Gestor de Pedidos), pra checagem de atualização
+ *     tags: [Status]
+ *     responses:
+ *       200:
+ *         description: Versões de referência
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 ultimaVersao: { type: string, example: "1.0.3" }
+ *                 versaoMinima: { type: string, example: "1.0.3" }
+ */
+// Bump junto com app/pubspec.yaml sempre que uma nova versão do APK for publicada.
+// VERSAO_MINIMA_APP só sobe quando uma mudança no backend quebra versões antigas do app de
+// verdade (ex: um campo que passou a ser obrigatório) — força update só quando é preciso.
+const ULTIMA_VERSAO_APP = '1.0.4';
+const VERSAO_MINIMA_APP = '1.0.3'; // v1.0.3 trouxe a confirmação de pagamento obrigatória
+
+app.get('/app-version', (req, res) => {
+  res.json({ ultimaVersao: ULTIMA_VERSAO_APP, versaoMinima: VERSAO_MINIMA_APP });
+});
+
 app.get('/ping', (req, res) => {
   res.json({ message: 'pong' });
 });
