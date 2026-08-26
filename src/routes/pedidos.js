@@ -145,6 +145,74 @@ router.get('/', asyncHandler(async (req, res) => {
 
 /**
  * @openapi
+ * /empresas/{empresaId}/pedidos/conferencia-motoboys:
+ *   get:
+ *     summary: Conferência de recebimento por motoboy — soma o valor confirmado como recebido em cada entrega, agrupado por motoboy e forma de pagamento
+ *     tags: [Pedidos]
+ *     parameters:
+ *       - in: path
+ *         name: empresaId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *       - in: query
+ *         name: de
+ *         schema: { type: string, format: date }
+ *       - in: query
+ *         name: ate
+ *         schema: { type: string, format: date }
+ *     responses:
+ *       200:
+ *         description: Conferência por motoboy no período
+ */
+router.get('/conferencia-motoboys', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+  const { de, ate } = req.query;
+  const range = {
+    ...(de ? { gte: new Date(`${de}T00:00:00`) } : {}),
+    ...(ate ? { lte: new Date(`${ate}T23:59:59`) } : {}),
+  };
+
+  const entregues = await prisma.pedido.findMany({
+    where: {
+      empresaId: req.params.empresaId,
+      status: 'ENTREGUE',
+      motoboyId: { not: null },
+      ...(de || ate ? { entregueEm: range } : {}),
+    },
+    include: { motoboy: { select: { id: true, nome: true } } },
+  });
+
+  const porMotoboy = new Map();
+  let naoConfirmados = 0;
+
+  for (const p of entregues) {
+    if (!p.pagamentoConfirmado) {
+      naoConfirmados += 1;
+      continue;
+    }
+    const valor = Number(p.valorRecebido ?? p.total);
+    if (!porMotoboy.has(p.motoboyId)) {
+      porMotoboy.set(p.motoboyId, {
+        motoboyId: p.motoboyId,
+        motoboyNome: p.motoboy?.nome ?? 'Motoboy removido',
+        entregas: 0,
+        totais: { PIX: 0, DINHEIRO: 0, CARTAO: 0 },
+        total: 0,
+      });
+    }
+    const registro = porMotoboy.get(p.motoboyId);
+    registro.entregas += 1;
+    registro.totais[p.formaPagamento] += valor;
+    registro.total += valor;
+  }
+
+  res.json({
+    motoboys: Array.from(porMotoboy.values()).sort((a, b) => b.total - a.total),
+    naoConfirmados,
+  });
+}));
+
+/**
+ * @openapi
  * /empresas/{empresaId}/pedidos/{id}:
  *   get:
  *     summary: Busca um pedido pelo id
@@ -572,12 +640,20 @@ router.patch('/:id/status', asyncHandler(async (req, res, next) => {
   }
   next();
 }), asyncHandler(async (req, res) => {
-  const { status, fotoEntrega } = req.body;
+  const { status, fotoEntrega, pagamentoRecebido, valorRecebido } = req.body;
   if (!status || !STATUS_VALIDOS.includes(status)) {
     return res.status(400).json({ error: `Campo "status" é obrigatório e deve ser um de: ${STATUS_VALIDOS.join(', ')}` });
   }
   if (req.auth.role === 'MOTOBOY' && status !== 'ENTREGUE') {
     return res.status(403).json({ error: 'Motoboys só podem confirmar a entrega de um pedido' });
+  }
+  // Nenhuma entrega (pix, dinheiro ou cartão) pode ser concluída sem confirmar que o valor foi
+  // recebido — é essa confirmação que permite depois conferir o caixa de cada motoboy.
+  if (status === 'ENTREGUE' && pagamentoRecebido !== true) {
+    return res.status(400).json({ error: 'Confirme que o pagamento foi recebido para concluir a entrega.' });
+  }
+  if (status === 'ENTREGUE' && valorRecebido != null && (typeof valorRecebido !== 'number' || !(valorRecebido > 0))) {
+    return res.status(400).json({ error: 'Campo "valorRecebido" deve ser um número maior que zero' });
   }
 
   const pedido = await prisma.pedido.findFirst({
@@ -598,6 +674,9 @@ router.patch('/:id/status', asyncHandler(async (req, res, next) => {
   }
 
   const carimboCampo = TIMESTAMP_POR_STATUS[status];
+  const valorRecebidoFinal = status === 'ENTREGUE'
+    ? (typeof valorRecebido === 'number' ? valorRecebido : Number(pedido.trocoPara ?? pedido.total))
+    : undefined;
 
   const atualizado = await prisma.$transaction(async (tx) => {
     let salvo = await tx.pedido.update({
@@ -606,6 +685,11 @@ router.patch('/:id/status', asyncHandler(async (req, res, next) => {
         status,
         ...(carimboCampo ? { [carimboCampo]: new Date() } : {}),
         ...(status === 'ENTREGUE' && typeof fotoEntrega === 'string' && fotoEntrega ? { fotoEntrega } : {}),
+        ...(status === 'ENTREGUE' ? {
+          pagamentoConfirmado: true,
+          valorRecebido: valorRecebidoFinal,
+          pagamentoConfirmadoPorRole: req.auth.role,
+        } : {}),
       },
       include: { itens: { include: { opcoesSelecionadas: true } }, motoboy: { select: { id: true, nome: true, latitudeAtual: true, longitudeAtual: true, localizacaoAtualizadaEm: true } } },
     });

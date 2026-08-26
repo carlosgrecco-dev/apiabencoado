@@ -646,6 +646,12 @@ model Pedido {
   formaPagamento  FormaPagamento @map("forma_pagamento")
   trocoPara       Decimal?       @map("troco_para") @db.Decimal(10, 2)
 
+  /// Confirmação de que o valor da entrega (pix/dinheiro/cartão) foi efetivamente recebido —
+  /// obrigatória pra transição pra ENTREGUE, pra permitir conferir o caixa de cada motoboy.
+  pagamentoConfirmado        Boolean  @default(false) @map("pagamento_confirmado")
+  valorRecebido              Decimal? @map("valor_recebido") @db.Decimal(10, 2)
+  pagamentoConfirmadoPorRole String?  @map("pagamento_confirmado_por_role")
+
   status          StatusPedido   @default(RECEBIDO)
   observacoes     String?
 

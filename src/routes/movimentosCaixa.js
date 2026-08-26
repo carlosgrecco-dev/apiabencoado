@@ -7,7 +7,7 @@ const router = Router({ mergeParams: true });
 
 const asyncHandler = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
-const TIPOS_VALIDOS = ['ENTRADA', 'SAIDA', 'FECHAMENTO'];
+const TIPOS_VALIDOS = ['ENTRADA', 'SAIDA', 'SANGRIA', 'FECHAMENTO'];
 
 router.use(loadEmpresa);
 
