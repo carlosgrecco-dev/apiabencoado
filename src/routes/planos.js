@@ -8,6 +8,38 @@ const router = Router();
 
 const asyncHandler = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
+/**
+ * @openapi
+ * /planos/publico:
+ *   get:
+ *     summary: Lista os planos ativos, pra vitrine pública do site — sem dados internos (quantidade de lojas, etc.)
+ *     tags: [Planos]
+ *     responses:
+ *       200:
+ *         description: Lista de planos ativos
+ */
+router.get('/publico', asyncHandler(async (req, res) => {
+  const planos = await prisma.plano.findMany({
+    where: { ativo: true },
+    orderBy: [{ ordem: 'asc' }, { valorMensal: 'asc' }],
+    select: {
+      id: true,
+      nome: true,
+      valorMensal: true,
+      comissaoPercent: true,
+      descricao: true,
+      recursos: true,
+      limitePedidosMes: true,
+      limiteProdutos: true,
+      limiteUsuarios: true,
+      limiteEntregadores: true,
+      destaque: true,
+      ordem: true,
+    },
+  });
+  res.json(planos);
+}));
+
 router.use(requireSuperAdmin);
 
 const handlePrismaError = (error, res) => {

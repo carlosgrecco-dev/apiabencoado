@@ -192,8 +192,38 @@ model Plano {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   empresas Empresa[]
+  leadsComerciais LeadComercial[]
 
   @@map("planos")
+}
+
+enum StatusLeadComercial {
+  NOVO
+  CONTATADO
+  CONVERTIDO
+  DESCARTADO
+}
+
+/// Contato comercial de um prospect interessado em virar parceiro — capturado pelo drawer de
+/// contato no site público (front/src/components/ContatoComercialDrawer.tsx), visível só pro
+/// Super Admin. Não tem relação com Cliente/Empresa: quem preenche ainda não é tenant nenhum.
+model LeadComercial {
+  id               String              @id @default(uuid()) @db.Uuid
+  nome             String
+  email            String
+  telefone         String?
+  mensagem         String?
+  planoInteresseId String?             @map("plano_interesse_id") @db.Uuid
+  planoInteresse   Plano?              @relation(fields: [planoInteresseId], references: [id], onDelete: SetNull)
+  status           StatusLeadComercial @default(NOVO)
+  /// Anotação privada do Super Admin sobre o andamento da negociação — nunca visível ao lead.
+  notaInterna      String?             @map("nota_interna")
+  /// De qual página pública veio ("landing" ou "parceiro") — só pra saber o que está convertendo.
+  origem           String?
+  createdAt        DateTime            @default(now()) @map("created_at")
+  updatedAt        DateTime            @updatedAt @map("updated_at")
+
+  @@map("leads_comerciais")
 }
 
 enum StatusFatura {

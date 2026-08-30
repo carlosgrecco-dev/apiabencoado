@@ -27,6 +27,7 @@ const planosRouter = require('./routes/planos');
 const faturasRouter = require('./routes/faturas');
 const logsRouter = require('./routes/logs');
 const configuracoesPlataformaRouter = require('./routes/configuracoesPlataforma');
+const leadsComerciaisRouter = require('./routes/leadsComerciais');
 const uploadRouter = require('./routes/upload');
 const pushSubscriptionsRouter = require('./routes/pushSubscriptions');
 const favoritosRouter = require('./routes/favoritos');
@@ -167,6 +168,7 @@ app.use('/planos', planosRouter);
 app.use('/faturas', faturasRouter);
 app.use('/logs', logsRouter);
 app.use('/configuracoes-plataforma', configuracoesPlataformaRouter);
+app.use('/leads-comerciais', leadsComerciaisRouter);
 app.use('/uploads', uploadRouter);
 
 app.use((err, req, res, next) => {
