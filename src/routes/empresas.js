@@ -527,6 +527,9 @@ router.get('/slug/:slug', asyncHandler(async (req, res) => {
       habilitarIndicacaoAvancada: true,
       habilitarAvaliacaoDetalhada: true,
       habilitarCentralSuporte: true,
+      pdvHabilitado: true,
+      pdvMesaAbertaContinua: true,
+      pdvPermiteSplitPagamento: true,
       indicacaoRecompensaUnidades: true,
       lojaAbertaManual: true,
       usarHorarioAutomatico: true,
@@ -1361,6 +1364,56 @@ router.put('/:id/operacional', requireEmpresaAdmin('id'), asyncHandler(async (re
         ...(tempoEstimadoMin !== undefined ? { tempoEstimadoMin: tempoEstimadoMin === null ? null : Number(tempoEstimadoMin) } : {}),
         ...(tempoEstimadoMax !== undefined ? { tempoEstimadoMax: tempoEstimadoMax === null ? null : Number(tempoEstimadoMax) } : {}),
         ...(pedidoMinimo !== undefined ? { pedidoMinimo: Number(pedidoMinimo) } : {}),
+      },
+    });
+    res.json(serializeEmpresa(empresa));
+  } catch (error) {
+    return handlePrismaError(error, res);
+  }
+}));
+
+/**
+ * @openapi
+ * /empresas/{id}/pdv-config:
+ *   put:
+ *     summary: Autoatendimento — o próprio lojista escolhe como o PDV se comporta na loja dele (mesa aberta contínua, split de pagamento). pdvHabilitado em si é governado só pelo Super Admin via Planos/Funcionalidades.
+ *     tags: [Empresas]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               pdvMesaAbertaContinua: { type: boolean }
+ *               pdvPermiteSplitPagamento: { type: boolean }
+ *     responses:
+ *       200:
+ *         description: Configuração atualizada
+ *       404:
+ *         description: Empresa não encontrada
+ */
+router.put('/:id/pdv-config', requireEmpresaAdmin('id'), asyncHandler(async (req, res) => {
+  const { pdvMesaAbertaContinua, pdvPermiteSplitPagamento } = req.body;
+
+  if (pdvMesaAbertaContinua !== undefined && typeof pdvMesaAbertaContinua !== 'boolean') {
+    return res.status(400).json({ error: 'Campo "pdvMesaAbertaContinua" deve ser booleano' });
+  }
+  if (pdvPermiteSplitPagamento !== undefined && typeof pdvPermiteSplitPagamento !== 'boolean') {
+    return res.status(400).json({ error: 'Campo "pdvPermiteSplitPagamento" deve ser booleano' });
+  }
+
+  try {
+    const empresa = await prisma.empresa.update({
+      where: { id: req.params.id },
+      data: {
+        ...(pdvMesaAbertaContinua !== undefined ? { pdvMesaAbertaContinua } : {}),
+        ...(pdvPermiteSplitPagamento !== undefined ? { pdvPermiteSplitPagamento } : {}),
       },
     });
     res.json(serializeEmpresa(empresa));

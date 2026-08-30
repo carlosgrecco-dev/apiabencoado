@@ -6,6 +6,7 @@ const CAMPOS_FUNCIONALIDADES = [
   'habilitarFavoritos', 'habilitarPedirDeNovo', 'habilitarRankingFidelidade',
   'habilitarAgendamento', 'habilitarAvaliacaoComFotos', 'habilitarNotificacoesInApp',
   'habilitarMissoes', 'habilitarIndicacaoAvancada', 'habilitarAvaliacaoDetalhada', 'habilitarCentralSuporte',
+  'pdvHabilitado',
 ];
 
 module.exports = { CAMPOS_FUNCIONALIDADES };

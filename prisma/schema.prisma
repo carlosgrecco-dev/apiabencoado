@@ -185,6 +185,8 @@ model Plano {
   habilitarIndicacaoAvancada  Boolean @default(false) @map("habilitar_indicacao_avancada")
   habilitarAvaliacaoDetalhada Boolean @default(false) @map("habilitar_avaliacao_detalhada")
   habilitarCentralSuporte     Boolean @default(false) @map("habilitar_central_suporte")
+  /// PDV (venda de balcão/mesa) — 11ª função do pacote, governada pelo Super Admin como as outras.
+  pdvHabilitado               Boolean @default(false) @map("pdv_habilitado")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
