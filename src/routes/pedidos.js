@@ -4,13 +4,13 @@ const loadEmpresa = require('../lib/loadEmpresa');
 const validarCupom = require('../lib/validarCupom');
 const { calcularStatusLoja } = require('../lib/statusLoja');
 const { calcularFrete } = require('../lib/calcularFrete');
-const { disponibilidadeFidelidade, creditarUnidadesFidelidade } = require('../lib/fidelidade');
-const { RECOMPENSA_INDICACAO_UNIDADES, bonusPorMarco } = require('../lib/indicacao');
-const { creditarCashback } = require('../lib/cashback');
+const { disponibilidadeFidelidade } = require('../lib/fidelidade');
 const { creditarCoins, debitarCoins } = require('../lib/coins');
 const { notificarPedido } = require('../lib/pushNotifications');
 const { criarNotificacaoCliente } = require('../lib/notificacoesCliente');
 const { requireEmpresaAdmin, requireCliente } = require('../lib/auth');
+const { montarItensPedido, decrementarEstoque, ErroPedidoItens } = require('../lib/pedidoItens');
+const { finalizarComoEntregue } = require('../lib/pedidoFinalizacao');
 
 const router = Router({ mergeParams: true });
 
@@ -20,6 +20,7 @@ router.use(loadEmpresa);
 
 const STATUS_VALIDOS = ['RECEBIDO', 'PREPARANDO', 'SAIU_ENTREGA', 'ENTREGUE', 'CANCELADO'];
 const FORMAS_PAGAMENTO_VALIDAS = ['PIX', 'DINHEIRO', 'CARTAO'];
+const TIPOS_PEDIDO_VALIDOS = ['DELIVERY', 'BALCAO', 'MESA', 'RETIRADA'];
 
 const TIMESTAMP_POR_STATUS = {
   PREPARANDO: 'preparandoEm',
@@ -28,14 +29,28 @@ const TIMESTAMP_POR_STATUS = {
   CANCELADO: 'canceladoEm',
 };
 
-/** Próxima transição de status válida a partir da atual (fluxo linear + cancelamento a qualquer momento). */
-const PROXIMOS_STATUS_VALIDOS = {
-  RECEBIDO: ['PREPARANDO', 'CANCELADO'],
-  PREPARANDO: ['SAIU_ENTREGA', 'CANCELADO'],
-  SAIU_ENTREGA: ['ENTREGUE', 'CANCELADO'],
-  ENTREGUE: [],
-  CANCELADO: [],
+/**
+ * Próxima transição de status válida a partir da atual, indexado por tipo de pedido: DELIVERY
+ * mantém o fluxo com etapa de entrega; BALCAO/MESA/RETIRADA pulam direto pra ENTREGUE (não tem
+ * "saiu pra entrega" pra esses casos).
+ */
+const PROXIMOS_STATUS_VALIDOS_POR_TIPO = {
+  DELIVERY: {
+    RECEBIDO: ['PREPARANDO', 'CANCELADO'],
+    PREPARANDO: ['SAIU_ENTREGA', 'CANCELADO'],
+    SAIU_ENTREGA: ['ENTREGUE', 'CANCELADO'],
+    ENTREGUE: [],
+    CANCELADO: [],
+  },
+  PDV: {
+    RECEBIDO: ['PREPARANDO', 'ENTREGUE', 'CANCELADO'],
+    PREPARANDO: ['ENTREGUE', 'CANCELADO'],
+    ENTREGUE: [],
+    CANCELADO: [],
+  },
 };
+const proximosStatusValidos = (tipoPedido) =>
+  PROXIMOS_STATUS_VALIDOS_POR_TIPO[tipoPedido === 'DELIVERY' ? 'DELIVERY' : 'PDV'];
 
 /**
  * @openapi
@@ -113,15 +128,19 @@ router.get('/', asyncHandler(async (req, res) => {
   }
   const motoboyIdFiltro = req.auth.role === 'MOTOBOY' ? req.auth.motoboyId : req.query.motoboyId;
 
-  const { status, motoboyPago, de, ate } = req.query;
+  const { status, motoboyPago, de, ate, tipoPedido } = req.query;
 
   if (status && !STATUS_VALIDOS.includes(status)) {
     return res.status(400).json({ error: `Campo "status" deve ser um de: ${STATUS_VALIDOS.join(', ')}` });
+  }
+  if (tipoPedido && !TIPOS_PEDIDO_VALIDOS.includes(tipoPedido)) {
+    return res.status(400).json({ error: `Campo "tipoPedido" deve ser um de: ${TIPOS_PEDIDO_VALIDOS.join(', ')}` });
   }
 
   const where = {
     empresaId: req.params.empresaId,
     ...(status ? { status } : {}),
+    ...(tipoPedido ? { tipoPedido } : {}),
     ...(motoboyIdFiltro ? { motoboyId: motoboyIdFiltro } : {}),
     ...(motoboyPago !== undefined ? { motoboyPago: motoboyPago === 'true' } : {}),
     ...(de || ate
@@ -272,19 +291,36 @@ router.post('/', asyncHandler(async (req, res) => {
   const {
     clienteNome, clienteTelefone, endereco, bairro, referencia,
     formaPagamento, trocoPara, observacoes, itens, usarItemGratis, cupomCodigo, agendadoPara, usarCashback, usarCoins,
+    tipoPedido, mesaIdentificador,
   } = req.body;
 
-  // Checkout aceita convidado (sem login) — clienteId nunca vem do corpo da requisição, só do
-  // token de quem estiver logado como CLIENTE desta empresa, pra ninguém resgatar fidelidade ou
-  // aplicar cupom de "primeira compra" em nome de outra pessoa.
+  const souEmpresaAdmin = req.auth && req.auth.role === 'EMPRESA_ADMIN' && req.auth.empresaId === req.params.empresaId;
+
+  // Só o PDV (autenticado como EMPRESA_ADMIN) pode criar pedido de balcão/mesa/retirada — o
+  // checkout público continua sempre DELIVERY, sem nenhuma mudança de comportamento.
+  const tipoPedidoFinal = tipoPedido && TIPOS_PEDIDO_VALIDOS.includes(tipoPedido) ? tipoPedido : 'DELIVERY';
+  if (tipoPedido && !TIPOS_PEDIDO_VALIDOS.includes(tipoPedido)) {
+    return res.status(400).json({ error: `Campo "tipoPedido" deve ser um de: ${TIPOS_PEDIDO_VALIDOS.join(', ')}` });
+  }
+  if (tipoPedidoFinal !== 'DELIVERY' && !souEmpresaAdmin) {
+    return res.status(403).json({ error: 'Só o painel/app da loja pode criar pedidos de balcão, mesa ou retirada' });
+  }
+
+  // Checkout aceita convidado (sem login) — clienteId nunca vem do corpo da requisição de um
+  // cliente qualquer, só do token de quem estiver logado como CLIENTE desta empresa, pra ninguém
+  // resgatar fidelidade ou aplicar cupom de "primeira compra" em nome de outra pessoa. O PDV
+  // (EMPRESA_ADMIN) já administra todos os clientes da própria loja, então pode informar um
+  // clienteId explícito (ex: cliente buscado/cadastrado na hora) sem essa mesma restrição.
   const clienteId = (req.auth && req.auth.role === 'CLIENTE' && req.auth.empresaId === req.params.empresaId)
     ? req.auth.clienteId
-    : null;
+    : (souEmpresaAdmin && req.body.clienteId) ? req.body.clienteId : null;
 
   const erros = [];
-  if (!clienteNome) erros.push('Campo "clienteNome" é obrigatório');
-  if (!clienteTelefone) erros.push('Campo "clienteTelefone" é obrigatório');
-  if (!endereco) erros.push('Campo "endereco" é obrigatório');
+  if (tipoPedidoFinal === 'DELIVERY') {
+    if (!clienteNome) erros.push('Campo "clienteNome" é obrigatório');
+    if (!clienteTelefone) erros.push('Campo "clienteTelefone" é obrigatório');
+    if (!endereco) erros.push('Campo "endereco" é obrigatório');
+  }
   if (!formaPagamento || !FORMAS_PAGAMENTO_VALIDAS.includes(formaPagamento)) {
     erros.push(`Campo "formaPagamento" é obrigatório e deve ser um de: ${FORMAS_PAGAMENTO_VALIDAS.join(', ')}`);
   }
@@ -326,94 +362,35 @@ router.post('/', asyncHandler(async (req, res) => {
     return res.status(400).json({ error: 'A loja está fechada no momento e não está aceitando novos pedidos.' });
   }
 
-  const produtoIds = [...new Set(itens.map((i) => i.produtoId))];
-  const produtos = await prisma.produto.findMany({
-    where: { id: { in: produtoIds }, empresaId: req.params.empresaId, ativo: true },
-    include: { gruposOpcao: { include: { opcoes: true } } },
-  });
-  const produtoPorId = new Map(produtos.map((p) => [p.id, p]));
-
-  const itensParaCriar = [];
-  for (const item of itens) {
-    const produto = produtoPorId.get(item.produtoId);
-    if (!produto) {
-      return res.status(400).json({ error: `Produto ${item.produtoId} não encontrado ou indisponível` });
-    }
-    if (produto.esgotadoHoje) {
-      return res.status(400).json({ error: `Produto "${produto.nome}" está esgotado hoje` });
-    }
-    const quantidade = Number(item.quantidade);
-    if (!Number.isInteger(quantidade) || quantidade < 1) {
-      return res.status(400).json({ error: `Quantidade inválida para o produto "${produto.nome}"` });
-    }
-    if (produto.controlarEstoque && (produto.estoqueQtd ?? 0) < quantidade) {
-      return res.status(400).json({ error: `Estoque insuficiente para o produto "${produto.nome}"` });
-    }
-
-    const opcaoIdsSelecionados = Array.isArray(item.opcoes) ? [...new Set(item.opcoes)] : [];
-    const opcoesSelecionadas = [];
-
-    for (const grupo of produto.gruposOpcao) {
-      const opcoesDoGrupo = new Map(grupo.opcoes.map((o) => [o.id, o]));
-      const selecionadasDoGrupo = opcaoIdsSelecionados
-        .map((id) => opcoesDoGrupo.get(id))
-        .filter((o) => o && o.ativo);
-
-      const minEfetivo = grupo.obrigatorio ? Math.max(1, grupo.minSelecoes) : grupo.minSelecoes;
-      if (selecionadasDoGrupo.length < minEfetivo) {
-        return res.status(400).json({
-          error: `Selecione ao menos ${minEfetivo} opção(ões) em "${grupo.nome}" para o produto "${produto.nome}"`,
-        });
-      }
-      const maxEfetivo = !grupo.selecaoMultipla ? 1 : (grupo.maxSelecoes ?? Infinity);
-      if (selecionadasDoGrupo.length > maxEfetivo) {
-        return res.status(400).json({
-          error: `Selecione no máximo ${maxEfetivo} opção(ões) em "${grupo.nome}" para o produto "${produto.nome}"`,
-        });
-      }
-
-      for (const opcao of selecionadasDoGrupo) {
-        opcoesSelecionadas.push({
-          opcaoId: opcao.id,
-          nomeGrupo: grupo.nome,
-          nomeOpcao: opcao.nome,
-          precoAdicional: opcao.precoAdicional,
-        });
-      }
-    }
-
-    const precoBase = Number(produto.precoPromocional ?? produto.preco);
-    const precoAdicionais = opcoesSelecionadas.reduce((sum, o) => sum + Number(o.precoAdicional), 0);
-    const precoUnitario = precoBase + precoAdicionais;
-
-    itensParaCriar.push({
-      produtoId: produto.id,
-      nomeProduto: produto.nome,
-      ehCombo: produto.ehCombo,
-      precoUnitario,
-      quantidade,
-      observacoes: item.observacoes || null,
-      ...(opcoesSelecionadas.length > 0 ? { opcoesSelecionadas: { create: opcoesSelecionadas } } : {}),
-    });
+  let itensParaCriar;
+  let produtoPorId;
+  try {
+    ({ itensParaCriar, produtoPorId } = await montarItensPedido(prisma, req.params.empresaId, itens));
+  } catch (err) {
+    if (err instanceof ErroPedidoItens) return res.status(400).json({ error: err.message });
+    throw err;
   }
 
   let subtotal = itensParaCriar.reduce((sum, i) => sum + Number(i.precoUnitario) * i.quantidade, 0);
 
-  const pedidoMinimo = Number(req.empresa.pedidoMinimo);
+  const pedidoMinimo = tipoPedidoFinal === 'DELIVERY' ? Number(req.empresa.pedidoMinimo) : 0;
   if (pedidoMinimo > 0 && subtotal < pedidoMinimo) {
     return res.status(400).json({ error: `Pedido mínimo de R$ ${pedidoMinimo.toFixed(2)}` });
   }
 
-  const zonas = await prisma.zonaEntrega.findMany({
-    where: { empresaId: req.params.empresaId, tipo: 'BAIRRO', ativo: true },
-  });
-  const { taxa: taxaEntrega } = calcularFrete({
-    zonas,
-    bairro,
-    subtotal,
-    taxaPadrao: req.empresa.taxaEntrega,
-    freteGratisAcimaDe: req.empresa.freteGratisAcimaDe,
-  });
+  let taxaEntrega = 0;
+  if (tipoPedidoFinal === 'DELIVERY') {
+    const zonas = await prisma.zonaEntrega.findMany({
+      where: { empresaId: req.params.empresaId, tipo: 'BAIRRO', ativo: true },
+    });
+    ({ taxa: taxaEntrega } = calcularFrete({
+      zonas,
+      bairro,
+      subtotal,
+      taxaPadrao: req.empresa.taxaEntrega,
+      freteGratisAcimaDe: req.empresa.freteGratisAcimaDe,
+    }));
+  }
 
   let cliente = null;
   let resgatouItemGratis = false;
@@ -513,9 +490,11 @@ router.post('/', asyncHandler(async (req, res) => {
         data: {
           empresaId: req.params.empresaId,
           numero,
-          clienteNome,
-          clienteTelefone,
-          endereco,
+          tipoPedido: tipoPedidoFinal,
+          mesaIdentificador: tipoPedidoFinal === 'MESA' ? (mesaIdentificador || null) : null,
+          clienteNome: clienteNome || null,
+          clienteTelefone: clienteTelefone || null,
+          endereco: endereco || null,
           bairro: bairro || null,
           referencia: referencia || null,
           subtotal,
@@ -569,15 +548,7 @@ router.post('/', asyncHandler(async (req, res) => {
         });
       }
 
-      for (const item of itensParaCriar) {
-        const produto = produtoPorId.get(item.produtoId);
-        if (produto.controlarEstoque) {
-          await tx.produto.update({
-            where: { id: produto.id },
-            data: { estoqueQtd: Math.max(0, (produto.estoqueQtd ?? 0) - item.quantidade) },
-          });
-        }
-      }
+      await decrementarEstoque(tx, itensParaCriar, produtoPorId);
 
       return criado;
     });
@@ -640,7 +611,10 @@ router.patch('/:id/status', asyncHandler(async (req, res, next) => {
   }
   next();
 }), asyncHandler(async (req, res) => {
-  const { status, fotoEntrega, pagamentoRecebido, valorRecebido } = req.body;
+  const {
+    status, fotoEntrega, pagamentoRecebido, valorRecebido, pagamentos,
+    descontoManual, acrescimoManual, motivoAjusteManual,
+  } = req.body;
   if (!status || !STATUS_VALIDOS.includes(status)) {
     return res.status(400).json({ error: `Campo "status" é obrigatório e deve ser um de: ${STATUS_VALIDOS.join(', ')}` });
   }
@@ -655,6 +629,34 @@ router.patch('/:id/status', asyncHandler(async (req, res, next) => {
   if (status === 'ENTREGUE' && valorRecebido != null && (typeof valorRecebido !== 'number' || !(valorRecebido > 0))) {
     return res.status(400).json({ error: 'Campo "valorRecebido" deve ser um número maior que zero' });
   }
+  // Ajuste manual de valor (desconto/acréscimo avulso do PDV) — nunca vindo de um motoboy, só de
+  // quem está operando a venda como EMPRESA_ADMIN.
+  if ((descontoManual != null || acrescimoManual != null) && req.auth.role !== 'EMPRESA_ADMIN') {
+    return res.status(403).json({ error: 'Só o admin da loja pode aplicar desconto ou acréscimo manual' });
+  }
+  if (descontoManual != null && (typeof descontoManual !== 'number' || descontoManual < 0)) {
+    return res.status(400).json({ error: 'Campo "descontoManual" deve ser um número maior ou igual a zero' });
+  }
+  if (acrescimoManual != null && (typeof acrescimoManual !== 'number' || acrescimoManual < 0)) {
+    return res.status(400).json({ error: 'Campo "acrescimoManual" deve ser um número maior ou igual a zero' });
+  }
+  // Pagamento dividido (PDV) — cada linha precisa ser uma forma "de verdade" (nunca MULTIPLO,
+  // que é só o rótulo agregado quando há mais de uma linha).
+  let pagamentosValidados = null;
+  if (status === 'ENTREGUE' && Array.isArray(pagamentos) && pagamentos.length > 0) {
+    for (const p of pagamentos) {
+      if (!p || !FORMAS_PAGAMENTO_VALIDAS.includes(p.formaPagamento)) {
+        return res.status(400).json({ error: `Cada pagamento precisa de uma "formaPagamento" válida: ${FORMAS_PAGAMENTO_VALIDAS.join(', ')}` });
+      }
+      if (typeof p.valor !== 'number' || !(p.valor > 0)) {
+        return res.status(400).json({ error: 'Cada pagamento precisa de um "valor" maior que zero' });
+      }
+    }
+    if (pagamentos.length > 1 && !req.empresa.pdvPermiteSplitPagamento) {
+      return res.status(403).json({ error: 'Esta loja não habilitou dividir uma venda em mais de uma forma de pagamento' });
+    }
+    pagamentosValidados = pagamentos;
+  }
 
   const pedido = await prisma.pedido.findFirst({
     where: { id: req.params.id, empresaId: req.params.empresaId },
@@ -667,16 +669,35 @@ router.patch('/:id/status', asyncHandler(async (req, res, next) => {
     return res.status(403).json({ error: 'Este pedido não está atribuído a você' });
   }
 
-  if (!PROXIMOS_STATUS_VALIDOS[pedido.status].includes(status)) {
+  if (!proximosStatusValidos(pedido.tipoPedido)[pedido.status].includes(status)) {
     return res.status(400).json({
       error: `Não é possível mudar de "${pedido.status}" para "${status}"`,
     });
   }
 
+  // Total final considerando ajuste manual (o subtotal/taxaEntrega gravados na criação não mudam
+  // — só o total pago reflete o desconto/acréscimo aplicado no fechamento).
+  const totalAjustado = status === 'ENTREGUE'
+    ? Number(pedido.total) - (descontoManual ?? 0) + (acrescimoManual ?? 0)
+    : Number(pedido.total);
+  if (status === 'ENTREGUE' && pagamentosValidados) {
+    const somaPagamentos = pagamentosValidados.reduce((sum, p) => sum + p.valor, 0);
+    if (Math.abs(somaPagamentos - totalAjustado) > 0.01) {
+      return res.status(400).json({ error: `A soma dos pagamentos (R$ ${somaPagamentos.toFixed(2)}) não bate com o total da venda (R$ ${totalAjustado.toFixed(2)})` });
+    }
+  }
+
   const carimboCampo = TIMESTAMP_POR_STATUS[status];
   const valorRecebidoFinal = status === 'ENTREGUE'
-    ? (typeof valorRecebido === 'number' ? valorRecebido : Number(pedido.trocoPara ?? pedido.total))
+    ? (pagamentosValidados ? pagamentosValidados.reduce((sum, p) => sum + p.valor, 0)
+      : typeof valorRecebido === 'number' ? valorRecebido : Number(pedido.trocoPara ?? pedido.total))
     : undefined;
+  const formaPagamentoFinal = pagamentosValidados && pagamentosValidados.length > 1
+    ? 'MULTIPLO'
+    : pagamentosValidados?.[0]?.formaPagamento;
+  // Quando o fechamento veio com uma única linha de pagamento (não dividido), reflete o troco
+  // dela também no campo flat do pedido — é o que a comanda impressa e o card do pedido leem.
+  const trocoParaFinal = pagamentosValidados?.length === 1 ? pagamentosValidados[0].trocoPara : undefined;
 
   const atualizado = await prisma.$transaction(async (tx) => {
     let salvo = await tx.pedido.update({
@@ -689,128 +710,37 @@ router.patch('/:id/status', asyncHandler(async (req, res, next) => {
           pagamentoConfirmado: true,
           valorRecebido: valorRecebidoFinal,
           pagamentoConfirmadoPorRole: req.auth.role,
+          ...(formaPagamentoFinal ? { formaPagamento: formaPagamentoFinal } : {}),
+          ...(trocoParaFinal !== undefined ? { trocoPara: trocoParaFinal } : {}),
+          ...(descontoManual != null || acrescimoManual != null ? {
+            descontoManual: descontoManual ?? null,
+            acrescimoManual: acrescimoManual ?? null,
+            motivoAjusteManual: motivoAjusteManual || null,
+            total: totalAjustado,
+          } : {}),
         } : {}),
       },
       include: { itens: { include: { opcoesSelecionadas: true } }, motoboy: { select: { id: true, nome: true, latitudeAtual: true, longitudeAtual: true, localizacaoAtualizadaEm: true } } },
     });
 
-    // Ao confirmar a entrega, registra a venda como entrada no caixa unificado.
-    if (status === 'ENTREGUE') {
-      await tx.movimentoCaixa.create({
-        data: {
-          empresaId: req.params.empresaId,
-          tipo: 'ENTRADA',
-          descricao: `Pedido #${salvo.numero} — ${salvo.clienteNome}`,
-          valor: salvo.total,
-          dataMovimento: new Date(),
-        },
+    if (status === 'ENTREGUE' && pagamentosValidados) {
+      await tx.pedidoPagamento.createMany({
+        data: pagamentosValidados.map((p) => ({
+          pedidoId: salvo.id,
+          formaPagamento: p.formaPagamento,
+          valor: p.valor,
+          trocoPara: p.trocoPara || null,
+        })),
       });
+    }
 
-      // Credita fidelidade (1x por pedido, guardado por unidadesFidelidadeCreditadas).
-      if (salvo.clienteId && salvo.unidadesFidelidadeCreditadas == null) {
-        const unidades = salvo.itens.reduce((sum, item) => sum + item.quantidade, 0);
-        await creditarUnidadesFidelidade(tx, salvo.clienteId, unidades);
-        await tx.pedido.update({
-          where: { id: salvo.id },
-          data: { unidadesFidelidadeCreditadas: unidades },
-        });
-        // Reflete no objeto que a rota devolve — sem isso, o response deste PATCH ficava com o
-        // valor antigo mesmo já tendo sido atualizado no banco acima.
-        salvo = { ...salvo, unidadesFidelidadeCreditadas: unidades };
-      }
-
-      // Credita cashback sobre o subtotal (1x por pedido, guardado por cashbackCreditado).
-      const cashbackPercent = req.empresa.cashbackPercent ? Number(req.empresa.cashbackPercent) : 0;
-      if (salvo.clienteId && cashbackPercent > 0 && salvo.cashbackCreditado == null) {
-        const valorCashback = Number(salvo.subtotal) * (cashbackPercent / 100);
-        await creditarCashback(tx, salvo.clienteId, valorCashback);
-        await tx.pedido.update({
-          where: { id: salvo.id },
-          data: { cashbackCreditado: valorCashback },
-        });
-        salvo = { ...salvo, cashbackCreditado: valorCashback };
-      }
-
-      // Credita SaltFood Coins sobre o subtotal (1x por pedido, guardado por coinsCreditado) —
-      // só se a loja participar (opt-in) e o cliente já tiver uma conta de plataforma vinculada.
-      // Em paralelo ao cashback local acima, sem interferir nele.
-      const coinsPercent = req.empresa.participaSaltfoodCoins && req.empresa.saltfoodCoinsPercent
-        ? Number(req.empresa.saltfoodCoinsPercent) : 0;
-      if (salvo.clienteId && coinsPercent > 0 && salvo.coinsCreditado == null) {
-        const clienteConta = await tx.cliente.findUnique({
-          where: { id: salvo.clienteId },
-          select: { contaPlataformaId: true },
-        });
-        if (clienteConta?.contaPlataformaId) {
-          const valorCoins = Number(salvo.subtotal) * (coinsPercent / 100);
-          await creditarCoins(tx, {
-            contaPlataformaId: clienteConta.contaPlataformaId,
-            empresaId: req.params.empresaId,
-            clienteId: salvo.clienteId,
-            pedidoId: salvo.id,
-            valor: valorCoins,
-          });
-          await tx.pedido.update({
-            where: { id: salvo.id },
-            data: { coinsCreditado: valorCoins },
-          });
-          salvo = { ...salvo, coinsCreditado: valorCoins };
-        }
-      }
-
-      // Indicação: se esse pedido é a primeira compra concluída de um cliente indicado por
-      // outro, credita fidelidade pros dois lados — uma única vez (indicacaoRecompensada trava).
-      if (salvo.clienteId) {
-        const cliente = await tx.cliente.findUnique({ where: { id: salvo.clienteId } });
-        if (cliente?.indicadoPorId && !cliente.indicacaoRecompensada) {
-          const pedidosAnterioresEntregues = await tx.pedido.count({
-            where: { clienteId: cliente.id, status: 'ENTREGUE', id: { not: salvo.id } },
-          });
-          if (pedidosAnterioresEntregues === 0) {
-            const recompensaIndicacao = req.empresa.habilitarIndicacaoAvancada
-              ? req.empresa.indicacaoRecompensaUnidades
-              : RECOMPENSA_INDICACAO_UNIDADES;
-            await creditarUnidadesFidelidade(tx, cliente.id, recompensaIndicacao);
-            await creditarUnidadesFidelidade(tx, cliente.indicadoPorId, recompensaIndicacao);
-            await tx.cliente.update({ where: { id: cliente.id }, data: { indicacaoRecompensada: true } });
-
-            // Modo avançado: acumula o total de indicações concluídas do indicador e libera
-            // bônus de marco (3/10/25) quando bate exatamente numa dessas metas.
-            if (req.empresa.habilitarIndicacaoAvancada) {
-              const indicador = await tx.cliente.update({
-                where: { id: cliente.indicadoPorId },
-                data: { indicacoesConcluidas: { increment: 1 } },
-              });
-              const bonus = bonusPorMarco(indicador.indicacoesConcluidas);
-              if (bonus) {
-                await creditarUnidadesFidelidade(tx, indicador.id, bonus);
-              }
-            }
-          }
-        }
-      }
-
-      // Missões de fidelidade: avalia as participações ativas do cliente e credita quem bateu a meta.
-      if (salvo.clienteId && req.empresa.habilitarMissoes) {
-        const participacoesAtivas = await tx.missaoCliente.findMany({
-          where: { clienteId: salvo.clienteId, concluidaEm: null },
-          include: { missao: true },
-        });
-        for (const participacao of participacoesAtivas) {
-          const expiraEm = new Date(participacao.iniciadaEm).getTime() + participacao.missao.periodoDias * 86400000;
-          if (Date.now() > expiraEm) continue;
-          const pedidosCount = await tx.pedido.count({
-            where: { clienteId: salvo.clienteId, status: 'ENTREGUE', createdAt: { gte: participacao.iniciadaEm } },
-          });
-          if (pedidosCount >= participacao.missao.metaPedidos) {
-            await creditarUnidadesFidelidade(tx, salvo.clienteId, participacao.missao.recompensaUnidades);
-            await tx.missaoCliente.update({
-              where: { id: participacao.id },
-              data: { concluidaEm: new Date(), recompensada: true },
-            });
-          }
-        }
-      }
+    if (status === 'ENTREGUE') {
+      salvo = await finalizarComoEntregue(tx, {
+        pedido: salvo,
+        empresaId: req.params.empresaId,
+        empresa: req.empresa,
+        pagamentos: pagamentosValidados,
+      });
     }
 
     return salvo;
@@ -839,6 +769,143 @@ router.patch('/:id/status', asyncHandler(async (req, res, next) => {
       }).catch(() => {});
     }
   }
+
+  res.json(atualizado);
+}));
+
+/**
+ * @openapi
+ * /empresas/{empresaId}/pedidos/{id}/itens:
+ *   post:
+ *     summary: Adiciona itens a um pedido já criado (mesa aberta do PDV) — não existe pra pedidos já ENTREGUE/CANCELADO
+ *     tags: [Pedidos]
+ *     parameters:
+ *       - in: path
+ *         name: empresaId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [itens]
+ *             properties:
+ *               itens:
+ *                 type: array
+ *                 items: { $ref: '#/components/schemas/PedidoItemInput' }
+ *     responses:
+ *       200:
+ *         description: Pedido atualizado com os itens novos
+ *       400:
+ *         description: Pedido já finalizado ou item inválido
+ *       404:
+ *         description: Pedido não encontrado
+ */
+router.post('/:id/itens', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+  const { itens } = req.body;
+  if (!Array.isArray(itens) || itens.length === 0) {
+    return res.status(400).json({ error: 'Informe ao menos um item' });
+  }
+
+  const pedido = await prisma.pedido.findFirst({
+    where: { id: req.params.id, empresaId: req.params.empresaId },
+  });
+  if (!pedido) {
+    return res.status(404).json({ error: 'Pedido não encontrado' });
+  }
+  if (['ENTREGUE', 'CANCELADO'].includes(pedido.status)) {
+    return res.status(400).json({ error: 'Este pedido já foi finalizado e não aceita mais itens' });
+  }
+
+  let itensParaCriar;
+  let produtoPorId;
+  try {
+    ({ itensParaCriar, produtoPorId } = await montarItensPedido(prisma, req.params.empresaId, itens));
+  } catch (err) {
+    if (err instanceof ErroPedidoItens) return res.status(400).json({ error: err.message });
+    throw err;
+  }
+
+  const subtotalNovo = itensParaCriar.reduce((sum, i) => sum + Number(i.precoUnitario) * i.quantidade, 0);
+
+  const atualizado = await prisma.$transaction(async (tx) => {
+    await decrementarEstoque(tx, itensParaCriar, produtoPorId);
+    return tx.pedido.update({
+      where: { id: pedido.id },
+      data: {
+        itens: { create: itensParaCriar },
+        subtotal: { increment: subtotalNovo },
+        total: { increment: subtotalNovo },
+      },
+      include: { itens: { include: { opcoesSelecionadas: true } }, motoboy: { select: { id: true, nome: true, latitudeAtual: true, longitudeAtual: true, localizacaoAtualizadaEm: true } } },
+    });
+  });
+
+  res.json(atualizado);
+}));
+
+/**
+ * @openapi
+ * /empresas/{empresaId}/pedidos/{id}/itens/{itemId}:
+ *   delete:
+ *     summary: Remove um item de um pedido ainda não finalizado (corrige lançamento errado antes de fechar a conta)
+ *     tags: [Pedidos]
+ *     parameters:
+ *       - in: path
+ *         name: empresaId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *       - in: path
+ *         name: itemId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Pedido atualizado sem o item
+ *       404:
+ *         description: Pedido ou item não encontrado
+ */
+router.delete('/:id/itens/:itemId', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+  const pedido = await prisma.pedido.findFirst({
+    where: { id: req.params.id, empresaId: req.params.empresaId },
+  });
+  if (!pedido) {
+    return res.status(404).json({ error: 'Pedido não encontrado' });
+  }
+  if (['ENTREGUE', 'CANCELADO'].includes(pedido.status)) {
+    return res.status(400).json({ error: 'Este pedido já foi finalizado e não permite remover itens' });
+  }
+
+  const item = await prisma.pedidoItem.findFirst({
+    where: { id: req.params.itemId, pedidoId: pedido.id },
+  });
+  if (!item) {
+    return res.status(404).json({ error: 'Item não encontrado neste pedido' });
+  }
+
+  const valorItem = Number(item.precoUnitario) * item.quantidade;
+
+  const atualizado = await prisma.$transaction(async (tx) => {
+    await tx.pedidoItem.delete({ where: { id: item.id } });
+    return tx.pedido.update({
+      where: { id: pedido.id },
+      data: {
+        subtotal: { decrement: valorItem },
+        total: { decrement: valorItem },
+      },
+      include: { itens: { include: { opcoesSelecionadas: true } }, motoboy: { select: { id: true, nome: true, latitudeAtual: true, longitudeAtual: true, localizacaoAtualizadaEm: true } } },
+    });
+  });
 
   res.json(atualizado);
 }));

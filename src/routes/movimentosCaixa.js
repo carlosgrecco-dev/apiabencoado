@@ -7,7 +7,7 @@ const router = Router({ mergeParams: true });
 
 const asyncHandler = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
-const TIPOS_VALIDOS = ['ENTRADA', 'SAIDA', 'SANGRIA', 'FECHAMENTO'];
+const TIPOS_VALIDOS = ['ENTRADA', 'SAIDA', 'SANGRIA', 'SUPRIMENTO', 'FECHAMENTO'];
 
 router.use(loadEmpresa);
 
@@ -184,10 +184,18 @@ router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
     }
   }
 
+  // Anexa a sessão de caixa aberta automaticamente — nunca vem do corpo da requisição, pra um
+  // lançamento manual (sangria/suprimento/etc.) entrar na conferência do turno certo.
+  const caixaAberto = await prisma.caixaSessao.findFirst({
+    where: { empresaId: req.params.empresaId, status: 'ABERTO' },
+    select: { id: true },
+  });
+
   const movimento = await prisma.movimentoCaixa.create({
     data: {
       empresaId: req.params.empresaId,
       motoboyId: motoboyId || null,
+      caixaSessaoId: caixaAberto?.id ?? null,
       tipo,
       descricao: descricao || null,
       valor,

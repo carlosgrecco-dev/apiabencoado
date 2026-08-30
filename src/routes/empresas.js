@@ -1047,6 +1047,9 @@ router.post('/admin-login', asyncHandler(async (req, res) => {
     corPrimaria: empresa.corPrimaria,
     corSecundaria: empresa.corSecundaria,
     logoUrl: empresa.logoUrl,
+    pdvHabilitado: empresa.pdvHabilitado,
+    pdvMesaAbertaContinua: empresa.pdvMesaAbertaContinua,
+    pdvPermiteSplitPagamento: empresa.pdvPermiteSplitPagamento,
     token,
   });
 }));

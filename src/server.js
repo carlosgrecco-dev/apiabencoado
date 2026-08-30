@@ -33,6 +33,8 @@ const favoritosRouter = require('./routes/favoritos');
 const notificacoesRouter = require('./routes/notificacoes');
 const missoesRouter = require('./routes/missoes');
 const ticketsRouter = require('./routes/tickets');
+const operadoresPdvRouter = require('./routes/operadoresPdv');
+const caixaSessoesRouter = require('./routes/caixaSessoes');
 const serializeDecimals = require('./lib/serializeDecimals');
 const { registrarLog } = require('./lib/auditLog');
 
@@ -125,7 +127,7 @@ app.get('/', (req, res) => {
 // Bump junto com app/pubspec.yaml sempre que uma nova versão do APK for publicada.
 // VERSAO_MINIMA_APP só sobe quando uma mudança no backend quebra versões antigas do app de
 // verdade (ex: um campo que passou a ser obrigatório) — força update só quando é preciso.
-const ULTIMA_VERSAO_APP = '1.0.4';
+const ULTIMA_VERSAO_APP = '1.1.0';
 const VERSAO_MINIMA_APP = '1.0.3'; // v1.0.3 trouxe a confirmação de pagamento obrigatória
 
 app.get('/app-version', (req, res) => {
@@ -153,6 +155,8 @@ app.use('/empresas/:empresaId/clientes/:clienteId/favoritos', favoritosRouter);
 app.use('/empresas/:empresaId/clientes/:clienteId/notificacoes', notificacoesRouter);
 app.use('/empresas/:empresaId/missoes', missoesRouter);
 app.use('/empresas/:empresaId/tickets', ticketsRouter);
+app.use('/empresas/:empresaId/operadores-pdv', operadoresPdvRouter);
+app.use('/empresas/:empresaId/caixa-sessoes', caixaSessoesRouter);
 app.use('/empresas/:empresaId/horarios', horariosRouter);
 app.use('/empresas/:empresaId/zonas-entrega', zonasEntregaRouter);
 app.use('/empresas/:empresaId/frete', freteRouter);

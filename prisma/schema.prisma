@@ -98,6 +98,17 @@ model Empresa {
   habilitarAvaliacaoDetalhada  Boolean @default(false) @map("habilitar_avaliacao_detalhada")
   habilitarCentralSuporte      Boolean @default(false) @map("habilitar_central_suporte")
 
+  // PDV (venda de balcão/mesa direto no app do lojista) — núcleo: venda + pagamento + caixa.
+  /// Libera a aba PDV no app Flutter da loja.
+  pdvHabilitado            Boolean @default(false) @map("pdv_habilitado")
+  /// Cada tenant escolhe o comportamento que se adequa ao seu negócio: false = mesa é fechada de
+  /// uma vez só (como uma venda de balcão nomeada); true = mesa fica aberta recebendo itens aos
+  /// poucos até ser fechada e paga no final.
+  pdvMesaAbertaContinua    Boolean @default(false) @map("pdv_mesa_aberta_continua")
+  /// Cada tenant escolhe: false = uma forma de pagamento por venda (padrão); true = permite
+  /// dividir a mesma venda em mais de uma forma (ex: metade Pix, metade dinheiro).
+  pdvPermiteSplitPagamento Boolean @default(false) @map("pdv_permite_split_pagamento")
+
   /// Unidades de fidelidade por indicação concluída — só usado quando habilitarIndicacaoAvancada=true (senão usa o padrão fixo de 3).
   indicacaoRecompensaUnidades Int @default(3) @map("indicacao_recompensa_unidades")
 
@@ -129,6 +140,8 @@ model Empresa {
   missoes           Missao[]
   ticketsSuporte    TicketSuporte[]
   movimentosCoins   CoinsMovimento[]
+  operadoresPdv     OperadorPdv[]
+  caixaSessoes      CaixaSessao[]
 
   planoId String? @map("plano_id") @db.Uuid
   plano   Plano?  @relation(fields: [planoId], references: [id], onDelete: SetNull)
@@ -295,8 +308,10 @@ model Cliente {
   empresa                Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
   nome                   String
   telefone               String?
-  email                  String
-  senhaHash              String   @map("senha_hash")
+  /// Nulos quando o cliente foi criado via "cadastro rápido" no PDV (só nome/telefone, sem
+  /// conta própria pra logar depois) — @@unique abaixo tolera múltiplos null normalmente.
+  email                  String?
+  senhaHash              String?  @map("senha_hash")
 
   // Fidelidade: a cada 10 unidades de itens compradas (em pedidos ENTREGUES), 1 item grátis é liberado.
   totalUnidadesCompradas Int       @default(0) @map("total_unidades_compradas")
@@ -617,6 +632,8 @@ enum FormaPagamento {
   PIX
   DINHEIRO
   CARTAO
+  /// Venda paga em mais de uma forma (PDV) — ver PedidoPagamento.
+  MULTIPLO
 }
 
 enum StatusPedido {
@@ -627,15 +644,32 @@ enum StatusPedido {
   CANCELADO
 }
 
+/// Canal/origem do pedido. DELIVERY é o padrão (todo pedido de hoje é DELIVERY) — os outros 3 são
+/// o núcleo do PDV, criado direto no app da loja.
+enum TipoPedido {
+  DELIVERY
+  BALCAO
+  MESA
+  RETIRADA
+}
+
 model Pedido {
   id              String         @id @default(uuid()) @db.Uuid
   empresaId       String         @map("empresa_id") @db.Uuid
   empresa         Empresa        @relation(fields: [empresaId], references: [id], onDelete: Cascade)
   numero          Int
 
-  clienteNome     String         @map("cliente_nome")
-  clienteTelefone String         @map("cliente_telefone")
-  endereco        String
+  /// DELIVERY (padrão, todo pedido de hoje) ou o núcleo do PDV — balcão/mesa/retirada, criados
+  /// direto no app da loja. Decide quais campos abaixo são exigidos (ver POST /pedidos).
+  tipoPedido        TipoPedido @default(DELIVERY) @map("tipo_pedido")
+  /// Identificador livre da mesa/comanda (ex: "Mesa 5") — só usado quando tipoPedido=MESA.
+  mesaIdentificador String?    @map("mesa_identificador")
+
+  /// Nulos em pedidos de balcão/mesa/retirada sem cliente identificado ("venda sem
+  /// identificação") — continuam obrigatórios pra tipoPedido=DELIVERY (validado na rota).
+  clienteNome     String?        @map("cliente_nome")
+  clienteTelefone String?        @map("cliente_telefone")
+  endereco        String?
   bairro          String?
   referencia      String?
 
@@ -651,6 +685,15 @@ model Pedido {
   pagamentoConfirmado        Boolean  @default(false) @map("pagamento_confirmado")
   valorRecebido              Decimal? @map("valor_recebido") @db.Decimal(10, 2)
   pagamentoConfirmadoPorRole String?  @map("pagamento_confirmado_por_role")
+  /// Linhas de pagamento quando a venda é dividida em mais de uma forma (PDV, ver
+  /// Empresa.pdvPermiteSplitPagamento) — quando vazio, os campos flat acima é que valem.
+  pagamentos                 PedidoPagamento[]
+
+  /// Ajuste manual aplicado pelo EMPRESA_ADMIN no PDV (nunca pelo MOTOBOY) — desconto/acréscimo
+  /// avulso, sem cupom nem conta de cliente por trás.
+  descontoManual     Decimal? @map("desconto_manual") @db.Decimal(10, 2)
+  acrescimoManual    Decimal? @map("acrescimo_manual") @db.Decimal(10, 2)
+  motivoAjusteManual String?  @map("motivo_ajuste_manual")
 
   status          StatusPedido   @default(RECEBIDO)
   observacoes     String?
@@ -713,9 +756,25 @@ model Pedido {
   pushSubscriptions PushSubscription[]
   ticketsSuporte    TicketSuporte[]
   movimentosCoins   CoinsMovimento[]
+  movimentosCaixa   MovimentoCaixa[]
 
   @@unique([empresaId, numero])
   @@map("pedidos")
+}
+
+/// Uma linha de pagamento de um Pedido pago em mais de uma forma (PDV com split habilitado) —
+/// ver Empresa.pdvPermiteSplitPagamento. Quando a venda usa uma forma só, essa tabela fica vazia
+/// e os campos flat em Pedido (formaPagamento/valorRecebido/trocoPara) continuam valendo.
+model PedidoPagamento {
+  id             String         @id @default(uuid()) @db.Uuid
+  pedidoId       String         @map("pedido_id") @db.Uuid
+  pedido         Pedido         @relation(fields: [pedidoId], references: [id], onDelete: Cascade)
+  formaPagamento FormaPagamento @map("forma_pagamento")
+  valor          Decimal        @db.Decimal(10, 2)
+  trocoPara      Decimal?       @map("troco_para") @db.Decimal(10, 2)
+  createdAt      DateTime       @default(now()) @map("created_at")
+
+  @@map("pedido_pagamentos")
 }
 
 /// Inscrição de push do navegador na página de acompanhamento de um pedido — permite avisar
@@ -848,6 +907,8 @@ enum TipoMovimentoCaixa {
   ENTRADA
   SAIDA
   SANGRIA
+  /// Reforço de troco no meio do turno — distinto do fundo de troco inicial (CaixaSessao.fundoTroco).
+  SUPRIMENTO
   FECHAMENTO
 }
 
@@ -864,7 +925,70 @@ model MovimentoCaixa {
   dataMovimento DateTime            @default(now()) @map("data_movimento") @db.Date
   createdAt     DateTime            @default(now()) @map("created_at")
 
+  /// Sessão de caixa aberta no momento do lançamento — atribuída automaticamente pelo servidor
+  /// (nunca vem do cliente), permite conferência/diferença por turno.
+  caixaSessaoId String?      @map("caixa_sessao_id") @db.Uuid
+  caixaSessao   CaixaSessao? @relation(fields: [caixaSessaoId], references: [id], onDelete: SetNull)
+  /// Rastreabilidade até a venda que originou o lançamento (ex: qual Pedido gerou esta ENTRADA).
+  pedidoId      String?      @map("pedido_id") @db.Uuid
+  pedido        Pedido?      @relation(fields: [pedidoId], references: [id], onDelete: SetNull)
+  /// Snapshot da forma de pagamento da venda — necessário pra separar "esperado em dinheiro" do
+  /// resto na conferência de fechamento, principalmente quando a venda foi dividida (uma linha de
+  /// MovimentoCaixa por PedidoPagamento).
+  formaPagamento FormaPagamento? @map("forma_pagamento")
+
   @@map("movimentos_caixa")
+}
+
+enum StatusCaixa {
+  ABERTO
+  FECHADO
+}
+
+/// Sessão de caixa (abertura/fechamento de turno) — não existia antes: MovimentoCaixa era só uma
+/// lista solta, sem fundo de troco, operador ou conferência de diferença. MVP: um caixa aberto
+/// por vez por empresa (sem múltiplos terminais simultâneos).
+model CaixaSessao {
+  id           String       @id @default(uuid()) @db.Uuid
+  empresaId    String       @map("empresa_id") @db.Uuid
+  empresa      Empresa      @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  operadorId   String?      @map("operador_id") @db.Uuid
+  operador     OperadorPdv? @relation(fields: [operadorId], references: [id], onDelete: SetNull)
+  /// Snapshot do nome do operador — sobrevive mesmo se o OperadorPdv for removido depois.
+  operadorNome String       @map("operador_nome")
+  fundoTroco   Decimal      @default(0) @map("fundo_troco") @db.Decimal(10, 2)
+  status       StatusCaixa  @default(ABERTO)
+  abertoEm     DateTime     @default(now()) @map("aberto_em")
+  fechadoEm    DateTime?    @map("fechado_em")
+
+  /// Preenchidos só no fechamento: quanto foi contado fisicamente, quanto era esperado (fundo +
+  /// entradas em dinheiro - saídas/sangrias + suprimentos) e a diferença entre os dois.
+  valorContado          Decimal? @map("valor_contado") @db.Decimal(10, 2)
+  valorEsperado         Decimal? @map("valor_esperado") @db.Decimal(10, 2)
+  diferenca             Decimal? @db.Decimal(10, 2)
+  observacoesFechamento String?  @map("observacoes_fechamento")
+
+  movimentos MovimentoCaixa[]
+
+  @@map("caixa_sessoes")
+}
+
+/// Identidade leve de quem opera o PDV (caixa/atendente) — sem login novo, o app continua
+/// autenticado como EMPRESA_ADMIN. Serve só pra saber "quem" abriu cada CaixaSessao, pra
+/// relatório de caixa por operador. Mesmo padrão de Motoboy.pinHash.
+model OperadorPdv {
+  id        String   @id @default(uuid()) @db.Uuid
+  empresaId String   @map("empresa_id") @db.Uuid
+  empresa   Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  nome      String
+  pinHash   String?  @map("pin_hash")
+  ativo     Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  caixaSessoes CaixaSessao[]
+
+  @@map("operadores_pdv")
 }
 
 /// Slide do carrossel do Hero (usado só quando Empresa.heroUsarCarrossel = true).

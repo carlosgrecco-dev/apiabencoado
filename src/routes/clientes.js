@@ -140,6 +140,46 @@ router.post('/signup', asyncHandler(async (req, res) => {
 
 /**
  * @openapi
+ * /empresas/{empresaId}/clientes/cadastro-rapido:
+ *   post:
+ *     summary: Cadastra um cliente só com nome/telefone (PDV) — sem e-mail/senha, não consegue logar sozinho depois
+ *     tags: [Clientes]
+ *     parameters:
+ *       - in: path
+ *         name: empresaId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [nome]
+ *             properties:
+ *               nome: { type: string }
+ *               telefone: { type: string }
+ *     responses:
+ *       201:
+ *         description: Cliente criado
+ *       400:
+ *         description: Dados inválidos
+ */
+router.post('/cadastro-rapido', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+  const { nome, telefone } = req.body;
+  if (!nome) {
+    return res.status(400).json({ error: 'Campo "nome" é obrigatório' });
+  }
+
+  const cliente = await prisma.cliente.create({
+    data: { empresaId: req.params.empresaId, nome, telefone: telefone || null },
+  });
+
+  res.status(201).json(serializeCliente(cliente));
+}));
+
+/**
+ * @openapi
  * /empresas/{empresaId}/clientes/login:
  *   post:
  *     summary: Login do cliente na loja
