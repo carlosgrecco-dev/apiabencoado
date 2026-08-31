@@ -926,20 +926,30 @@ enum StatusTicketSuporte {
   RESOLVIDO
 }
 
+/// SLA informativo (sem fila/alerta automático) pros chamados que o lojista abre com a Sigma —
+/// null pros tickets de cliente pra loja (esses não usam prioridade).
+enum PrioridadeChamado {
+  RELEVANTE
+  PRIORITARIA
+  URGENTE
+}
+
 /// Central de suporte: cliente relata um problema (opcionalmente ligado a um pedido), admin
 /// responde e resolve. Gera notificação in-app pro cliente quando o admin responde/resolve
-/// (se Empresa.habilitarNotificacoesInApp também estiver ligado).
+/// (se Empresa.habilitarNotificacoesInApp também estiver ligado). Quando clienteId é null, o
+/// ticket é do lojista falando com a Sigma/plataforma (ver PrioridadeChamado), não de um cliente.
 model TicketSuporte {
   id            String              @id @default(uuid()) @db.Uuid
   empresaId     String              @map("empresa_id") @db.Uuid
   empresa       Empresa             @relation(fields: [empresaId], references: [id], onDelete: Cascade)
   pedidoId      String?             @map("pedido_id") @db.Uuid
   pedido        Pedido?             @relation(fields: [pedidoId], references: [id], onDelete: SetNull)
-  clienteId     String              @map("cliente_id") @db.Uuid
-  cliente       Cliente             @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  clienteId     String?             @map("cliente_id") @db.Uuid
+  cliente       Cliente?            @relation(fields: [clienteId], references: [id], onDelete: Cascade)
   assunto       String
   mensagem      String
   status        StatusTicketSuporte @default(ABERTO)
+  prioridade    PrioridadeChamado?
   respostaAdmin String?             @map("resposta_admin")
   createdAt     DateTime            @default(now()) @map("created_at")
   updatedAt     DateTime            @updatedAt @map("updated_at")

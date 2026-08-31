@@ -11,6 +11,7 @@ const asyncHandler = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 router.use(loadEmpresa);
 
 const STATUS_VALIDOS = ['ABERTO', 'EM_ANDAMENTO', 'RESOLVIDO'];
+const PRIORIDADE_CHAMADO_VALIDOS = ['RELEVANTE', 'PRIORITARIA', 'URGENTE'];
 
 /**
  * @openapi
@@ -109,6 +110,55 @@ router.post('/', requireCliente(), asyncHandler(async (req, res) => {
 
 /**
  * @openapi
+ * /empresas/{empresaId}/tickets/lojista:
+ *   post:
+ *     summary: Lojista abre um chamado direto com a Sigma/plataforma (não é chamado de cliente)
+ *     tags: [Tickets]
+ *     parameters:
+ *       - in: path
+ *         name: empresaId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [assunto, mensagem, prioridade]
+ *             properties:
+ *               assunto: { type: string }
+ *               mensagem: { type: string }
+ *               prioridade: { type: string, enum: [RELEVANTE, PRIORITARIA, URGENTE] }
+ *     responses:
+ *       201:
+ *         description: Chamado criado
+ *       400:
+ *         description: Dados inválidos
+ */
+router.post('/lojista', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+  const { assunto, mensagem, prioridade } = req.body;
+  if (!assunto || !mensagem) {
+    return res.status(400).json({ error: 'Campos "assunto" e "mensagem" são obrigatórios' });
+  }
+  if (!PRIORIDADE_CHAMADO_VALIDOS.includes(prioridade)) {
+    return res.status(400).json({ error: `Campo "prioridade" deve ser um de: ${PRIORIDADE_CHAMADO_VALIDOS.join(', ')}` });
+  }
+
+  const ticket = await prisma.ticketSuporte.create({
+    data: {
+      empresaId: req.params.empresaId,
+      clienteId: null,
+      assunto,
+      mensagem,
+      prioridade,
+    },
+  });
+  res.status(201).json(ticket);
+}));
+
+/**
+ * @openapi
  * /empresas/{empresaId}/tickets/{id}:
  *   patch:
  *     summary: Admin responde e/ou atualiza o status de um ticket
@@ -155,7 +205,7 @@ router.patch('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
     },
   });
 
-  if ((status || respostaAdmin) && req.empresa.habilitarNotificacoesInApp) {
+  if (ticket.clienteId && (status || respostaAdmin) && req.empresa.habilitarNotificacoesInApp) {
     criarNotificacaoCliente(ticket.clienteId, {
       titulo: `Resposta no seu chamado: ${ticket.assunto}`,
       corpo: respostaAdmin || `Status atualizado para ${ticket.status}`,

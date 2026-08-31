@@ -358,4 +358,73 @@ router.get('/saltfood-coins/contas', requireSuperAdmin, asyncHandler(async (req,
   res.json(contas);
 }));
 
+const STATUS_CHAMADO_VALIDOS = ['ABERTO', 'EM_ANDAMENTO', 'RESOLVIDO'];
+
+/**
+ * @openapi
+ * /super-admin/chamados-lojistas:
+ *   get:
+ *     summary: Lista chamados que lojistas abriram diretamente com a plataforma (clienteId null)
+ *     tags: [SuperAdmin]
+ *     responses:
+ *       200:
+ *         description: Chamados de todas as empresas, mais recentes primeiro
+ */
+router.get('/chamados-lojistas', requireSuperAdmin, asyncHandler(async (req, res) => {
+  const chamados = await prisma.ticketSuporte.findMany({
+    where: { clienteId: null },
+    include: { empresa: { select: { id: true, nome: true } } },
+    orderBy: { createdAt: 'desc' },
+  });
+  res.json(chamados);
+}));
+
+/**
+ * @openapi
+ * /super-admin/chamados-lojistas/{id}:
+ *   patch:
+ *     summary: Super Admin responde e/ou atualiza o status de um chamado de lojista
+ *     tags: [SuperAdmin]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               status: { type: string, enum: [ABERTO, EM_ANDAMENTO, RESOLVIDO] }
+ *               respostaAdmin: { type: string }
+ *     responses:
+ *       200:
+ *         description: Chamado atualizado
+ *       404:
+ *         description: Chamado não encontrado
+ */
+router.patch('/chamados-lojistas/:id', requireSuperAdmin, asyncHandler(async (req, res) => {
+  const { status, respostaAdmin } = req.body;
+  if (status !== undefined && !STATUS_CHAMADO_VALIDOS.includes(status)) {
+    return res.status(400).json({ error: `Campo "status" deve ser um de: ${STATUS_CHAMADO_VALIDOS.join(', ')}` });
+  }
+
+  const existente = await prisma.ticketSuporte.findFirst({ where: { id: req.params.id, clienteId: null } });
+  if (!existente) {
+    return res.status(404).json({ error: 'Chamado não encontrado' });
+  }
+
+  const chamado = await prisma.ticketSuporte.update({
+    where: { id: req.params.id },
+    data: {
+      ...(status !== undefined ? { status } : {}),
+      ...(respostaAdmin !== undefined ? { respostaAdmin: respostaAdmin || null } : {}),
+    },
+    include: { empresa: { select: { id: true, nome: true } } },
+  });
+
+  res.json(chamado);
+}));
+
 module.exports = router;
