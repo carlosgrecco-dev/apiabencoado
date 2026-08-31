@@ -129,7 +129,7 @@ app.get('/', (req, res) => {
 // Bump junto com app/pubspec.yaml sempre que uma nova versão do APK for publicada.
 // VERSAO_MINIMA_APP só sobe quando uma mudança no backend quebra versões antigas do app de
 // verdade (ex: um campo que passou a ser obrigatório) — força update só quando é preciso.
-const ULTIMA_VERSAO_APP = '1.1.0';
+const ULTIMA_VERSAO_APP = '1.2.0';
 const VERSAO_MINIMA_APP = '1.0.3'; // v1.0.3 trouxe a confirmação de pagamento obrigatória
 
 app.get('/app-version', (req, res) => {
