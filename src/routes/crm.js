@@ -68,6 +68,16 @@ router.get('/resumo', asyncHandler(async (req, res) => {
   }
   const byPayment = Array.from(byPaymentMap.entries()).map(([formaPagamento, total]) => ({ formaPagamento, total }));
 
+  // Vendas por tipo de pedido (delivery vs balcão/mesa/retirada do PDV) — mesmo padrão de byPayment.
+  const porTipoPedidoMap = new Map();
+  for (const p of entregues) {
+    const atual = porTipoPedidoMap.get(p.tipoPedido) || { tipoPedido: p.tipoPedido, total: 0, quantidade: 0 };
+    atual.total += Number(p.total);
+    atual.quantidade += 1;
+    porTipoPedidoMap.set(p.tipoPedido, atual);
+  }
+  const porTipoPedido = Array.from(porTipoPedidoMap.values());
+
   const dailyMap = new Map();
   for (const p of entregues) {
     const dia = p.createdAt.toISOString().slice(0, 10);
@@ -122,6 +132,18 @@ router.get('/resumo', asyncHandler(async (req, res) => {
   const topProdutos = Array.from(produtoMap.values())
     .sort((a, b) => b.quantidade - a.quantidade)
     .slice(0, 10);
+
+  // Curva ABC: todos os produtos (não só o top 10), ordenados por receita, com % acumulado e
+  // classificação de Pareto padrão (A até 80% acumulado, B até 95%, C o resto).
+  const produtosPorReceita = Array.from(produtoMap.values()).sort((a, b) => b.receita - a.receita);
+  const receitaTotalProdutos = produtosPorReceita.reduce((sum, item) => sum + item.receita, 0);
+  let receitaAcumulada = 0;
+  const curvaAbc = produtosPorReceita.map((item) => {
+    receitaAcumulada += item.receita;
+    const percentualAcumulado = receitaTotalProdutos > 0 ? (receitaAcumulada / receitaTotalProdutos) * 100 : 0;
+    const classe = percentualAcumulado <= 80 ? 'A' : percentualAcumulado <= 95 ? 'B' : 'C';
+    return { ...item, percentualAcumulado, classe };
+  });
 
   // Horários de pico — conta os pedidos entregues por hora do dia (0-23), pra ajudar a escalar equipe.
   const porHoraMap = new Map();
@@ -197,12 +219,14 @@ router.get('/resumo', asyncHandler(async (req, res) => {
     avgRating,
     ratingCount: avaliados.length,
     byPayment,
+    porTipoPedido,
     daily,
     motoboyClosing: Array.from(motoboyMap.values()),
     comissaoPercent,
     comissaoValor,
     mostrarComissao: !req.empresa.ocultarComissaoTenant,
     topProdutos,
+    curvaAbc,
     porHora,
     porStatus,
     porBairro,
