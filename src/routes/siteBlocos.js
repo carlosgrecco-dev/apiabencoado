@@ -7,7 +7,7 @@ const router = Router();
 
 const asyncHandler = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
-const PAGINAS_VALIDAS = ['LANDING', 'PARCEIRO', 'RECURSOS', 'POLITICA_PRIVACIDADE'];
+const PAGINAS_VALIDAS = ['LANDING', 'PARCEIRO', 'PLANOS', 'RECURSOS', 'POLITICA_PRIVACIDADE'];
 const TIPOS_VALIDOS = ['HERO', 'LISTA_ICONES', 'CTA_BANNER'];
 
 /**

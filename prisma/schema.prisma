@@ -229,6 +229,7 @@ model LeadComercial {
 enum PaginaSite {
   LANDING
   PARCEIRO
+  PLANOS
   RECURSOS
   POLITICA_PRIVACIDADE
 }
