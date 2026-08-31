@@ -20,6 +20,10 @@ const SLUG_REGEX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 const onlyDigits = (value = '') => String(value).replace(/\D/g, '');
 
+/** Espaço em branco no início/fim passa despercebido no formulário mas quebra comparação exata
+ * de login (usuario) e busca por slug único — corta sempre que o campo vier de texto livre. */
+const trim = (value) => (typeof value === 'string' ? value.trim() : value);
+
 const UNIQUE_FIELD_LABELS = {
   email: 'E-mail',
   slug: 'Slug',
@@ -617,11 +621,17 @@ router.get('/:id', requireEmpresaAdmin('id'), asyncHandler(async (req, res) => {
  */
 router.post('/', requireSuperAdmin, asyncHandler(async (req, res) => {
   const {
-    nome, responsavelNome, email, telefone, documento, slug, usuario, senha,
-    empresaAtiva, adminAtivo, planoId, comissaoPercent, indicadoPor, ehDemo,
+    senha, empresaAtiva, adminAtivo, planoId, comissaoPercent, indicadoPor, ehDemo,
   } = req.body;
+  const nome = trim(req.body.nome);
+  const responsavelNome = trim(req.body.responsavelNome);
+  const email = trim(req.body.email);
+  const telefone = trim(req.body.telefone);
+  const documento = trim(req.body.documento);
+  const slug = trim(req.body.slug);
+  const usuario = trim(req.body.usuario);
 
-  const erros = validarPayload(req.body);
+  const erros = validarPayload({ nome, responsavelNome, email, telefone, documento, slug, usuario });
   if (!senha || String(senha).length < 6) {
     erros.push('Campo "senha" é obrigatório e deve ter ao menos 6 caracteres');
   }
@@ -729,12 +739,16 @@ router.post('/', requireSuperAdmin, asyncHandler(async (req, res) => {
  *         description: Campo único já cadastrado
  */
 router.put('/:id', requireSuperAdmin, asyncHandler(async (req, res) => {
-  const {
-    nome, responsavelNome, email, telefone, documento, slug, usuario,
-    empresaAtiva, adminAtivo,
-  } = req.body;
+  const { empresaAtiva, adminAtivo } = req.body;
+  const nome = trim(req.body.nome);
+  const responsavelNome = trim(req.body.responsavelNome);
+  const email = trim(req.body.email);
+  const telefone = trim(req.body.telefone);
+  const documento = trim(req.body.documento);
+  const slug = trim(req.body.slug);
+  const usuario = trim(req.body.usuario);
 
-  const erros = validarPayload(req.body);
+  const erros = validarPayload({ nome, responsavelNome, email, telefone, documento, slug, usuario });
   if (erros.length) {
     return res.status(400).json({ error: erros.join('; ') });
   }
@@ -958,13 +972,14 @@ router.delete('/:id', requireSuperAdmin, asyncHandler(async (req, res) => {
  *         description: Usuário ou senha inválidos, ou acesso desativado
  */
 router.post('/:id/admin-login', asyncHandler(async (req, res) => {
-  const { usuario, senha } = req.body;
+  const { senha } = req.body;
+  const usuario = trim(req.body.usuario);
   if (!usuario || !senha) {
     return res.status(400).json({ error: 'Campos "usuario" e "senha" são obrigatórios' });
   }
 
   const empresa = await prisma.empresa.findUnique({ where: { id: req.params.id } });
-  if (!empresa || empresa.usuario !== usuario) {
+  if (!empresa || empresa.usuario.trim() !== usuario) {
     return res.status(401).json({ error: 'Usuário ou senha inválidos' });
   }
 
@@ -1013,7 +1028,8 @@ router.post('/:id/admin-login', asyncHandler(async (req, res) => {
  *         description: Usuário ou senha inválidos, ou acesso desativado
  */
 router.post('/admin-login', asyncHandler(async (req, res) => {
-  const { usuario, senha } = req.body;
+  const { senha } = req.body;
+  const usuario = trim(req.body.usuario);
   if (!usuario || !senha) {
     return res.status(400).json({ error: 'Campos "usuario" e "senha" são obrigatórios' });
   }
