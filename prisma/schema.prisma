@@ -226,6 +226,51 @@ model LeadComercial {
   @@map("leads_comerciais")
 }
 
+enum PaginaSite {
+  LANDING
+  PARCEIRO
+  RECURSOS
+  POLITICA_PRIVACIDADE
+}
+
+enum TipoBlocoSite {
+  HERO
+  LISTA_ICONES
+  CTA_BANNER
+}
+
+/// Bloco de conteúdo editável do site público (CMS v1, Super Admin). Cada bloco ocupa um slot
+/// fixo (chave) definido pelo código do front — nunca criado livremente com uma chave arbitrária,
+/// porque só existe efeito visual se a página correspondente souber ler aquela chave. HERO e
+/// CTA_BANNER usam os campos de texto abaixo; LISTA_ICONES ignora-os e usa só "itens".
+model SiteBloco {
+  id     String        @id @default(uuid()) @db.Uuid
+  pagina PaginaSite
+  chave  String
+  tipo   TipoBlocoSite
+  ativo  Boolean       @default(true)
+  ordem  Int           @default(0)
+
+  eyebrow    String?
+  icone      String?
+  titulo     String?
+  subtitulo  String?
+  texto      String?
+  textoBotao String? @map("texto_botao")
+  /// Caminho interno (ex: "/parceiro") ou o sentinel "abrir-contato" pra abrir o
+  /// ContatoComercialDrawer da própria página em vez de navegar. Só usado em CTA_BANNER.
+  linkBotao  String? @map("link_botao")
+
+  /// Só em LISTA_ICONES: array de { icone, titulo, texto }. A ordem do array já é a ordem visual.
+  itens Json?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([pagina, chave])
+  @@map("site_blocos")
+}
+
 enum StatusFatura {
   PENDENTE
   PAGO
