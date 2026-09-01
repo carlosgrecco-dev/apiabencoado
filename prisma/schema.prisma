@@ -166,6 +166,7 @@ model Empresa {
   metas             Meta[]
   contasPagar       ContaPagar[]
   contasReceber     ContaReceber[]
+  fornecedores      Fornecedor[]
 
   planoId String? @map("plano_id") @db.Uuid
   plano   Plano?  @relation(fields: [planoId], references: [id], onDelete: SetNull)
@@ -1252,4 +1253,21 @@ model ContaReceber {
   updatedAt   DateTime    @updatedAt @map("updated_at")
 
   @@map("contas_receber")
+}
+
+/// Cadastro simples de fornecedor da loja — standalone por enquanto, sem vínculo obrigatório com
+/// ContaPagar ou Estoque (o lojista digita o nome do fornecedor livre em ContaPagar.fornecedorNome).
+model Fornecedor {
+  id          String   @id @default(uuid()) @db.Uuid
+  empresaId   String   @map("empresa_id") @db.Uuid
+  empresa     Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  nome        String
+  contato     String?
+  categoria   String?
+  observacoes String?
+  ativo       Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("fornecedores")
 }
