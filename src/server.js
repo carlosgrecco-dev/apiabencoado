@@ -40,6 +40,8 @@ const missoesRouter = require('./routes/missoes');
 const ticketsRouter = require('./routes/tickets');
 const operadoresPdvRouter = require('./routes/operadoresPdv');
 const caixaSessoesRouter = require('./routes/caixaSessoes');
+const contasPagarRouter = require('./routes/contasPagar');
+const contasReceberRouter = require('./routes/contasReceber');
 const serializeDecimals = require('./lib/serializeDecimals');
 const { registrarLog } = require('./lib/auditLog');
 
@@ -165,6 +167,8 @@ app.use('/empresas/:empresaId/missoes', missoesRouter);
 app.use('/empresas/:empresaId/tickets', ticketsRouter);
 app.use('/empresas/:empresaId/operadores-pdv', operadoresPdvRouter);
 app.use('/empresas/:empresaId/caixa-sessoes', caixaSessoesRouter);
+app.use('/empresas/:empresaId/contas-pagar', contasPagarRouter);
+app.use('/empresas/:empresaId/contas-receber', contasReceberRouter);
 app.use('/empresas/:empresaId/horarios', horariosRouter);
 app.use('/empresas/:empresaId/zonas-entrega', zonasEntregaRouter);
 app.use('/empresas/:empresaId/frete', freteRouter);

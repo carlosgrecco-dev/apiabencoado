@@ -7,33 +7,33 @@ datasource db {
 }
 
 model Empresa {
-  id              String   @id @default(uuid()) @db.Uuid
-  nome            String
-  responsavelNome String   @map("responsavel_nome")
-  email           String   @unique
-  telefone        String
-  documento       String   @unique
-  slug            String   @unique
-  usuario         String   @unique
-  senhaHash       String   @map("senha_hash")
-  empresaAtiva    Boolean  @default(true) @map("empresa_ativa")
-  adminAtivo      Boolean  @default(true) @map("admin_ativo")
+  id                  String    @id @default(uuid()) @db.Uuid
+  nome                String
+  responsavelNome     String    @map("responsavel_nome")
+  email               String    @unique
+  telefone            String
+  documento           String    @unique
+  slug                String    @unique
+  usuario             String    @unique
+  senhaHash           String    @map("senha_hash")
+  empresaAtiva        Boolean   @default(true) @map("empresa_ativa")
+  adminAtivo          Boolean   @default(true) @map("admin_ativo")
   /// Último login do admin do tenant — usado só pro Super Admin enxergar saúde/atividade da loja, não afeta nenhuma regra de acesso.
   ultimoAcessoAdminEm DateTime? @map("ultimo_acesso_admin_em")
   /// Loja de demonstração (ex: pra mostrar a plataforma pra um prospect) — funciona igual a qualquer
   /// tenant real, mas é excluída dos totais agregados do dashboard do Super Admin (GMV, nº de lojas,
   /// nº de clientes etc.), pra não distorcer os números reais da plataforma.
-  ehDemo Boolean @default(false) @map("eh_demo")
+  ehDemo              Boolean   @default(false) @map("eh_demo")
 
   // Perfil da loja (vitrine/admin da empresa)
-  descricao             String? // tagline curta, ex: "20 anos de sabor baiano"
-  sobre                 String? // texto livre exibido no rodapé/institucional
-  endereco              String?
-  horarioFuncionamento  String? @map("horario_funcionamento")
-  instagramUrl          String? @map("instagram_url")
-  facebookUrl           String? @map("facebook_url")
-  logoUrl               String? @map("logo_url")
-  taxaEntrega           Decimal @default(7.00) @map("taxa_entrega") @db.Decimal(10, 2)
+  descricao            String? // tagline curta, ex: "20 anos de sabor baiano"
+  sobre                String? // texto livre exibido no rodapé/institucional
+  endereco             String?
+  horarioFuncionamento String? @map("horario_funcionamento")
+  instagramUrl         String? @map("instagram_url")
+  facebookUrl          String? @map("facebook_url")
+  logoUrl              String? @map("logo_url")
+  taxaEntrega          Decimal @default(7.00) @map("taxa_entrega") @db.Decimal(10, 2)
 
   // Aparência (CMS da loja)
   corPrimaria       String  @default("#f97316") @map("cor_primaria")
@@ -47,7 +47,7 @@ model Empresa {
   heroLinkUrl       String? @map("hero_link_url")
 
   /// Percentual (5 a 20) sobre o total vendido destinado ao dono da plataforma, definido pelo Super Admin.
-  comissaoPercent Decimal @default(10.00) @map("comissao_percent") @db.Decimal(5, 2)
+  comissaoPercent       Decimal @default(10.00) @map("comissao_percent") @db.Decimal(5, 2)
   /// Se true, o card "Comissão da plataforma" fica oculto no CRM do próprio tenant. Controlado só pelo Super Admin.
   ocultarComissaoTenant Boolean @default(false) @map("ocultar_comissao_tenant")
 
@@ -56,12 +56,12 @@ model Empresa {
   // "indicado por" é preenchido por ele no cadastro. Quando a fatura do indicado é paga pela
   // 1ª vez, o indicador ganha crédito (ConfiguracaoPlataforma.recompensaIndicacaoEmpresaValor),
   // aplicado automaticamente como desconto na próxima fatura gerada pra ele.
-  codigoIndicacao               String?  @unique @map("codigo_indicacao")
-  indicadaPorEmpresaId          String?  @map("indicada_por_empresa_id") @db.Uuid
-  indicadaPor                   Empresa? @relation("IndicacoesEmpresa", fields: [indicadaPorEmpresaId], references: [id], onDelete: SetNull)
-  indicadas                     Empresa[] @relation("IndicacoesEmpresa")
-  indicacaoEmpresaRecompensada  Boolean  @default(false) @map("indicacao_empresa_recompensada")
-  creditoIndicacaoEmpresa       Decimal  @default(0) @map("credito_indicacao_empresa") @db.Decimal(10, 2)
+  codigoIndicacao              String?   @unique @map("codigo_indicacao")
+  indicadaPorEmpresaId         String?   @map("indicada_por_empresa_id") @db.Uuid
+  indicadaPor                  Empresa?  @relation("IndicacoesEmpresa", fields: [indicadaPorEmpresaId], references: [id], onDelete: SetNull)
+  indicadas                    Empresa[] @relation("IndicacoesEmpresa")
+  indicacaoEmpresaRecompensada Boolean   @default(false) @map("indicacao_empresa_recompensada")
+  creditoIndicacaoEmpresa      Decimal   @default(0) @map("credito_indicacao_empresa") @db.Decimal(10, 2)
 
   /// Texto livre (institucional) — se vazio, o front usa um modelo padrão de LGPD com os dados da empresa.
   termosConteudo String? @map("termos_conteudo")
@@ -78,17 +78,17 @@ model Empresa {
   /// (Bronze/Prata/Ouro) continua calculado por totalUnidadesCompradas nos dois métodos.
   fidelidadeMetodo       FidelidadeMetodo @default(CARIMBO) @map("fidelidade_metodo")
   /// Liga/desliga o programa inteiro (nos dois métodos) sem apagar nenhuma configuração.
-  fidelidadeAtiva        Boolean @default(true) @map("fidelidade_ativa")
-  fidelidadeNomePrograma String? @map("fidelidade_nome_programa") // ex: "Fidelidade Acarajé o Abençoado"; vazio = usa Empresa.nome
-  fidelidadeLogoUrl      String? @map("fidelidade_logo_url") // se vazio, usa o logoUrl da loja
-  fidelidadeValidadeDias Int?    @map("fidelidade_validade_dias") // prazo p/ resgatar o item grátis após ganhar (método CARIMBO); null = sem prazo
-  fidelidadeAvisoFaltam  Int?    @map("fidelidade_aviso_faltam") // dispara aviso na loja quando faltar X unidades p/ o prêmio
-  fidelidadeNomeItem     String? @map("fidelidade_nome_item") // nome genérico usado nas mensagens, ex: "lanches"
+  fidelidadeAtiva        Boolean          @default(true) @map("fidelidade_ativa")
+  fidelidadeNomePrograma String?          @map("fidelidade_nome_programa") // ex: "Fidelidade Acarajé o Abençoado"; vazio = usa Empresa.nome
+  fidelidadeLogoUrl      String?          @map("fidelidade_logo_url") // se vazio, usa o logoUrl da loja
+  fidelidadeValidadeDias Int?             @map("fidelidade_validade_dias") // prazo p/ resgatar o item grátis após ganhar (método CARIMBO); null = sem prazo
+  fidelidadeAvisoFaltam  Int?             @map("fidelidade_aviso_faltam") // dispara aviso na loja quando faltar X unidades p/ o prêmio
+  fidelidadeNomeItem     String?          @map("fidelidade_nome_item") // nome genérico usado nas mensagens, ex: "lanches"
   /// Termos e condições do programa, texto livre exibido ao cliente — opcional.
-  fidelidadeTermos       String? @map("fidelidade_termos")
+  fidelidadeTermos       String?          @map("fidelidade_termos")
   /// Limites de totalUnidadesCompradas pros níveis Prata/Ouro — configuráveis por loja (padrão 20/50, igual ao histórico fixo).
-  fidelidadeLimitePrata  Int     @default(20) @map("fidelidade_limite_prata")
-  fidelidadeLimiteOuro   Int     @default(50) @map("fidelidade_limite_ouro")
+  fidelidadeLimitePrata  Int              @default(20) @map("fidelidade_limite_prata")
+  fidelidadeLimiteOuro   Int              @default(50) @map("fidelidade_limite_ouro")
 
   // Método PONTOS (só usado quando fidelidadeMetodo = PONTOS)
   pontosNomeMoeda     String?  @default("pts") @map("pontos_nome_moeda") // rótulo exibido ao cliente, ex: "pts", "estrelas"
@@ -108,16 +108,16 @@ model Empresa {
 
   // Funcionalidades da loja (opt-in) — cada função só fica visível/ativa na vitrine depois que o
   // próprio tenant aprova e liga aqui no admin dele. Todas nascem desligadas por padrão.
-  habilitarFavoritos           Boolean @default(false) @map("habilitar_favoritos")
-  habilitarPedirDeNovo         Boolean @default(false) @map("habilitar_pedir_de_novo")
-  habilitarRankingFidelidade   Boolean @default(false) @map("habilitar_ranking_fidelidade")
-  habilitarAgendamento         Boolean @default(false) @map("habilitar_agendamento")
-  habilitarAvaliacaoComFotos   Boolean @default(false) @map("habilitar_avaliacao_com_fotos")
-  habilitarNotificacoesInApp   Boolean @default(false) @map("habilitar_notificacoes_in_app")
-  habilitarMissoes             Boolean @default(false) @map("habilitar_missoes")
-  habilitarIndicacaoAvancada   Boolean @default(false) @map("habilitar_indicacao_avancada")
-  habilitarAvaliacaoDetalhada  Boolean @default(false) @map("habilitar_avaliacao_detalhada")
-  habilitarCentralSuporte      Boolean @default(false) @map("habilitar_central_suporte")
+  habilitarFavoritos          Boolean @default(false) @map("habilitar_favoritos")
+  habilitarPedirDeNovo        Boolean @default(false) @map("habilitar_pedir_de_novo")
+  habilitarRankingFidelidade  Boolean @default(false) @map("habilitar_ranking_fidelidade")
+  habilitarAgendamento        Boolean @default(false) @map("habilitar_agendamento")
+  habilitarAvaliacaoComFotos  Boolean @default(false) @map("habilitar_avaliacao_com_fotos")
+  habilitarNotificacoesInApp  Boolean @default(false) @map("habilitar_notificacoes_in_app")
+  habilitarMissoes            Boolean @default(false) @map("habilitar_missoes")
+  habilitarIndicacaoAvancada  Boolean @default(false) @map("habilitar_indicacao_avancada")
+  habilitarAvaliacaoDetalhada Boolean @default(false) @map("habilitar_avaliacao_detalhada")
+  habilitarCentralSuporte     Boolean @default(false) @map("habilitar_central_suporte")
 
   // PDV (venda de balcão/mesa direto no app do lojista) — núcleo: venda + pagamento + caixa.
   /// Libera a aba PDV no app Flutter da loja.
@@ -164,6 +164,8 @@ model Empresa {
   operadoresPdv     OperadorPdv[]
   caixaSessoes      CaixaSessao[]
   metas             Meta[]
+  contasPagar       ContaPagar[]
+  contasReceber     ContaReceber[]
 
   planoId String? @map("plano_id") @db.Uuid
   plano   Plano?  @relation(fields: [planoId], references: [id], onDelete: SetNull)
@@ -173,13 +175,13 @@ model Empresa {
 
 /// Plano de assinatura da plataforma (modelo fixo + comissão), ex: "Básico R$99/mês + 5%".
 model Plano {
-  id              String   @id @default(uuid()) @db.Uuid
+  id              String  @id @default(uuid()) @db.Uuid
   nome            String
-  valorMensal     Decimal  @default(0) @map("valor_mensal") @db.Decimal(10, 2)
-  comissaoPercent Decimal  @map("comissao_percent") @db.Decimal(5, 2)
+  valorMensal     Decimal @default(0) @map("valor_mensal") @db.Decimal(10, 2)
+  comissaoPercent Decimal @map("comissao_percent") @db.Decimal(5, 2)
   descricao       String?
-  ativo           Boolean  @default(true)
-  ordem           Int      @default(0)
+  ativo           Boolean @default(true)
+  ordem           Int     @default(0)
 
   /// Lista de recursos exibidos na página do plano (ex: "Gestão de pedidos", "Dashboard", ...).
   recursos String[] @default([])
@@ -213,7 +215,7 @@ model Plano {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  empresas Empresa[]
+  empresas        Empresa[]
   leadsComerciais LeadComercial[]
 
   @@map("planos")
@@ -302,24 +304,24 @@ enum StatusFatura {
 
 /// Fatura de comissão (+ mensalidade do plano, se houver) gerada por período para uma empresa.
 model Fatura {
-  id              String       @id @default(uuid()) @db.Uuid
-  empresaId       String       @map("empresa_id") @db.Uuid
-  empresa         Empresa      @relation(fields: [empresaId], references: [id], onDelete: Cascade)
-  periodoInicio   DateTime     @map("periodo_inicio") @db.Date
-  periodoFim      DateTime     @map("periodo_fim") @db.Date
-  valorVendas     Decimal      @map("valor_vendas") @db.Decimal(12, 2)
-  comissaoPercent Decimal      @map("comissao_percent") @db.Decimal(5, 2)
-  valorComissao   Decimal      @map("valor_comissao") @db.Decimal(10, 2)
-  valorPlano      Decimal      @default(0) @map("valor_plano") @db.Decimal(10, 2)
-  valorTotal      Decimal      @map("valor_total") @db.Decimal(10, 2)
+  id                       String       @id @default(uuid()) @db.Uuid
+  empresaId                String       @map("empresa_id") @db.Uuid
+  empresa                  Empresa      @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  periodoInicio            DateTime     @map("periodo_inicio") @db.Date
+  periodoFim               DateTime     @map("periodo_fim") @db.Date
+  valorVendas              Decimal      @map("valor_vendas") @db.Decimal(12, 2)
+  comissaoPercent          Decimal      @map("comissao_percent") @db.Decimal(5, 2)
+  valorComissao            Decimal      @map("valor_comissao") @db.Decimal(10, 2)
+  valorPlano               Decimal      @default(0) @map("valor_plano") @db.Decimal(10, 2)
+  valorTotal               Decimal      @map("valor_total") @db.Decimal(10, 2)
   /// Crédito de indicação de loja abatido nesta fatura (Empresa.creditoIndicacaoEmpresa), já refletido no valorTotal acima.
-  creditoIndicacaoAplicado Decimal? @map("credito_indicacao_aplicado") @db.Decimal(10, 2)
-  status          StatusFatura @default(PENDENTE)
-  vencimento      DateTime     @db.Date
-  pagoEm          DateTime?    @map("pago_em")
-  observacoes     String?
-  createdAt       DateTime     @default(now()) @map("created_at")
-  updatedAt       DateTime     @updatedAt @map("updated_at")
+  creditoIndicacaoAplicado Decimal?     @map("credito_indicacao_aplicado") @db.Decimal(10, 2)
+  status                   StatusFatura @default(PENDENTE)
+  vencimento               DateTime     @db.Date
+  pagoEm                   DateTime?    @map("pago_em")
+  observacoes              String?
+  createdAt                DateTime     @default(now()) @map("created_at")
+  updatedAt                DateTime     @updatedAt @map("updated_at")
 
   @@unique([empresaId, periodoInicio, periodoFim])
   @@map("faturas")
@@ -348,17 +350,17 @@ model LogAuditoria {
 
 /// Configurações globais da plataforma (dona: Sigma Soluções Digitais). Linha única (singleton).
 model ConfiguracaoPlataforma {
-  id                   String   @id @default(uuid()) @db.Uuid
-  nomeEmpresa          String   @default("Sigma Soluções Digitais") @map("nome_empresa")
-  documento            String?
-  emailSuporte         String?  @map("email_suporte")
-  telefoneSuporte      String?  @map("telefone_suporte")
-  endereco             String?
-  termosPadraoLojistas String?  @map("termos_padrao_lojistas")
-  chavesGlobais        Json?    @map("chaves_globais")
+  id                              String   @id @default(uuid()) @db.Uuid
+  nomeEmpresa                     String   @default("Sigma Soluções Digitais") @map("nome_empresa")
+  documento                       String?
+  emailSuporte                    String?  @map("email_suporte")
+  telefoneSuporte                 String?  @map("telefone_suporte")
+  endereco                        String?
+  termosPadraoLojistas            String?  @map("termos_padrao_lojistas")
+  chavesGlobais                   Json?    @map("chaves_globais")
   /// Crédito em R$ dado a um tenant quando uma loja indicada por ele paga a 1ª fatura. 0 = programa desativado.
-  recompensaIndicacaoEmpresaValor Decimal @default(0) @map("recompensa_indicacao_empresa_valor") @db.Decimal(10, 2)
-  updatedAt            DateTime @updatedAt @map("updated_at")
+  recompensaIndicacaoEmpresaValor Decimal  @default(0) @map("recompensa_indicacao_empresa_valor") @db.Decimal(10, 2)
+  updatedAt                       DateTime @updatedAt @map("updated_at")
 
   @@map("configuracoes_plataforma")
 }
@@ -403,15 +405,15 @@ model ZonaEntrega {
 }
 
 model Cliente {
-  id                     String   @id @default(uuid()) @db.Uuid
-  empresaId              String   @map("empresa_id") @db.Uuid
-  empresa                Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
-  nome                   String
-  telefone               String?
+  id        String  @id @default(uuid()) @db.Uuid
+  empresaId String  @map("empresa_id") @db.Uuid
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  nome      String
+  telefone  String?
   /// Nulos quando o cliente foi criado via "cadastro rápido" no PDV (só nome/telefone, sem
   /// conta própria pra logar depois) — @@unique abaixo tolera múltiplos null normalmente.
-  email                  String?
-  senhaHash              String?  @map("senha_hash")
+  email     String?
+  senhaHash String? @map("senha_hash")
 
   // Fidelidade: a cada 10 unidades de itens compradas (em pedidos ENTREGUES), 1 item grátis é liberado.
   totalUnidadesCompradas Int       @default(0) @map("total_unidades_compradas")
@@ -422,7 +424,7 @@ model Cliente {
 
   /// Saldo de pontos — só usado/exibido quando Empresa.fidelidadeMetodo = PONTOS. Creditado sobre
   /// o subtotal (Empresa.pontosPorReal) ao entregar, debitado como desconto num pedido futuro.
-  saldoPontos            Int       @default(0) @map("saldo_pontos")
+  saldoPontos Int @default(0) @map("saldo_pontos")
 
   // Indicação: cada cliente tem um código próprio pra compartilhar; quem se cadastra usando o
   // código de alguém fica marcado como indicado, e os dois ganham unidades de fidelidade quando
@@ -521,19 +523,19 @@ model Favorito {
 }
 
 model EnderecoCliente {
-  id          String  @id @default(uuid()) @db.Uuid
-  clienteId   String  @map("cliente_id") @db.Uuid
-  cliente     Cliente @relation(fields: [clienteId], references: [id], onDelete: Cascade)
-  rotulo      String // "Casa", "Trabalho", "Apto", etc.
-  cep         String?
-  endereco    String
-  numero      String?
-  bairro      String?
-  cidade      String?
-  referencia  String?
-  principal   Boolean @default(false)
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  id         String   @id @default(uuid()) @db.Uuid
+  clienteId  String   @map("cliente_id") @db.Uuid
+  cliente    Cliente  @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  rotulo     String // "Casa", "Trabalho", "Apto", etc.
+  cep        String?
+  endereco   String
+  numero     String?
+  bairro     String?
+  cidade     String?
+  referencia String?
+  principal  Boolean  @default(false)
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
 
   @@map("enderecos_cliente")
 }
@@ -588,8 +590,8 @@ model Cupom {
   updatedAt            DateTime  @updatedAt @map("updated_at")
 
   /// Quando preenchido, o cupom é privado — só esse cliente pode aplicá-lo (ex: campanha "sentimos sua falta"). Null = cupom público, qualquer cliente da loja pode usar.
-  clienteAlvoId        String?   @map("cliente_alvo_id") @db.Uuid
-  clienteAlvo          Cliente?  @relation(fields: [clienteAlvoId], references: [id], onDelete: Cascade)
+  clienteAlvoId String?  @map("cliente_alvo_id") @db.Uuid
+  clienteAlvo   Cliente? @relation(fields: [clienteAlvoId], references: [id], onDelete: Cascade)
 
   /// Vazio = vale em qualquer bairro. Texto livre pra bater com Pedido.bairro (mesmo padrão de ZonaEntrega).
   bairrosRestritos       String[]        @default([]) @map("bairros_restritos")
@@ -633,23 +635,23 @@ model Produto {
   descricao        String?
   categoriaId      String?    @map("categoria_id") @db.Uuid
   categoria        Categoria? @relation(fields: [categoriaId], references: [id], onDelete: SetNull)
-  preco            Decimal  @db.Decimal(10, 2)
-  precoPromocional Decimal? @map("preco_promocional") @db.Decimal(10, 2)
-  fotoUrl          String?  @map("foto_url")
-  ativo            Boolean  @default(true)
-  ordem            Int      @default(0)
+  preco            Decimal    @db.Decimal(10, 2)
+  precoPromocional Decimal?   @map("preco_promocional") @db.Decimal(10, 2)
+  fotoUrl          String?    @map("foto_url")
+  ativo            Boolean    @default(true)
+  ordem            Int        @default(0)
   /// Marca o produto como combo (composto por vários itens) — exibido como selo nos pedidos.
-  ehCombo          Boolean  @default(false) @map("eh_combo")
+  ehCombo          Boolean    @default(false) @map("eh_combo")
 
   // Estoque & insumos
-  esgotadoHoje     Boolean  @default(false) @map("esgotado_hoje") // pausa rápida sem desativar/excluir o produto
-  controlarEstoque Boolean  @default(false) @map("controlar_estoque")
-  estoqueQtd       Int?     @map("estoque_qtd") // só relevante quando controlarEstoque=true
+  esgotadoHoje     Boolean @default(false) @map("esgotado_hoje") // pausa rápida sem desativar/excluir o produto
+  controlarEstoque Boolean @default(false) @map("controlar_estoque")
+  estoqueQtd       Int?    @map("estoque_qtd") // só relevante quando controlarEstoque=true
   /// Dispara alerta de estoque baixo no dashboard quando estoqueQtd cai a este nível ou abaixo — opcional, sem alerta se null.
-  estoqueMinimo    Int?     @map("estoque_minimo")
+  estoqueMinimo    Int?    @map("estoque_minimo")
 
-  createdAt        DateTime @default(now()) @map("created_at")
-  updatedAt        DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   itensPedido PedidoItem[]
   variacoes   ProdutoVariacao[]
@@ -685,20 +687,20 @@ model ProdutoGrupoOpcao {
 /// Item selecionável dentro de um grupo de opções (ex: "Camarão", "Pimenta", "Carne extra").
 /// precoAdicional = 0 significa incluso sem custo extra; > 0 é cobrado a mais por unidade do produto.
 model ProdutoOpcao {
-  id             String            @id @default(uuid()) @db.Uuid
-  grupoId        String            @map("grupo_id") @db.Uuid
-  grupo          ProdutoGrupoOpcao @relation(fields: [grupoId], references: [id], onDelete: Cascade)
-  nome           String
-  precoAdicional Decimal           @default(0) @map("preco_adicional") @db.Decimal(10, 2)
+  id                   String            @id @default(uuid()) @db.Uuid
+  grupoId              String            @map("grupo_id") @db.Uuid
+  grupo                ProdutoGrupoOpcao @relation(fields: [grupoId], references: [id], onDelete: Cascade)
+  nome                 String
+  precoAdicional       Decimal           @default(0) @map("preco_adicional") @db.Decimal(10, 2)
   /// Se true, a opção já vem marcada/inclusa por padrão no modal do cliente (ele desmarca o que não quiser).
-  selecionadoPorPadrao Boolean     @default(false) @map("selecionado_por_padrao")
+  selecionadoPorPadrao Boolean           @default(false) @map("selecionado_por_padrao")
   /// Foto e subtítulo opcionais, usados quando o grupo é exibido como cartões (ex: "No Saquinho" x "No Prato").
-  fotoUrl        String?           @map("foto_url")
-  descricao      String?
-  ativo          Boolean           @default(true)
-  ordem          Int               @default(0)
-  createdAt      DateTime          @default(now()) @map("created_at")
-  updatedAt      DateTime          @updatedAt @map("updated_at")
+  fotoUrl              String?           @map("foto_url")
+  descricao            String?
+  ativo                Boolean           @default(true)
+  ordem                Int               @default(0)
+  createdAt            DateTime          @default(now()) @map("created_at")
+  updatedAt            DateTime          @updatedAt @map("updated_at")
 
   itensPedido PedidoItemOpcao[]
 
@@ -722,19 +724,19 @@ model ProdutoVariacao {
 }
 
 model Motoboy {
-  id         String   @id @default(uuid()) @db.Uuid
-  empresaId  String   @map("empresa_id") @db.Uuid
-  empresa    Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  id         String  @id @default(uuid()) @db.Uuid
+  empresaId  String  @map("empresa_id") @db.Uuid
+  empresa    Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
   nome       String
   telefone   String?
-  taxaPadrao Decimal  @default(7.00) @map("taxa_padrao") @db.Decimal(10, 2)
-  pinHash    String?  @map("pin_hash")
-  ativo      Boolean  @default(true)
+  taxaPadrao Decimal @default(7.00) @map("taxa_padrao") @db.Decimal(10, 2)
+  pinHash    String? @map("pin_hash")
+  ativo      Boolean @default(true)
 
   /// Última posição GPS compartilhada pelo motoboy (navigator.geolocation do navegador — gratuito, sem chave de API).
-  latitudeAtual            Decimal?  @map("latitude_atual") @db.Decimal(10, 7)
-  longitudeAtual           Decimal?  @map("longitude_atual") @db.Decimal(10, 7)
-  localizacaoAtualizadaEm  DateTime? @map("localizacao_atualizada_em")
+  latitudeAtual           Decimal?  @map("latitude_atual") @db.Decimal(10, 7)
+  longitudeAtual          Decimal?  @map("longitude_atual") @db.Decimal(10, 7)
+  localizacaoAtualizadaEm DateTime? @map("localizacao_atualizada_em")
 
   /// Toggle manual que o próprio motoboy liga/desliga no portal dele, pra sinalizar ao admin se está livre pra nova corrida. Escopo só desta loja — não é um pool de motoboys da plataforma.
   disponivel Boolean @default(true)
@@ -751,8 +753,8 @@ model Motoboy {
   seguroUrl                String? @map("seguro_url")
   comprovanteResidenciaUrl String? @map("comprovante_residencia_url")
 
-  createdAt  DateTime @default(now()) @map("created_at")
-  updatedAt  DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   movimentosCaixa MovimentoCaixa[]
   pedidos         Pedido[]
@@ -792,10 +794,10 @@ enum TipoPedido {
 }
 
 model Pedido {
-  id              String         @id @default(uuid()) @db.Uuid
-  empresaId       String         @map("empresa_id") @db.Uuid
-  empresa         Empresa        @relation(fields: [empresaId], references: [id], onDelete: Cascade)
-  numero          Int
+  id        String  @id @default(uuid()) @db.Uuid
+  empresaId String  @map("empresa_id") @db.Uuid
+  empresa   Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  numero    Int
 
   /// DELIVERY (padrão, todo pedido de hoje) ou o núcleo do PDV — balcão/mesa/retirada, criados
   /// direto no app da loja. Decide quais campos abaixo são exigidos (ver POST /pedidos).
@@ -805,24 +807,24 @@ model Pedido {
 
   /// Nulos em pedidos de balcão/mesa/retirada sem cliente identificado ("venda sem
   /// identificação") — continuam obrigatórios pra tipoPedido=DELIVERY (validado na rota).
-  clienteNome     String?        @map("cliente_nome")
-  clienteTelefone String?        @map("cliente_telefone")
+  clienteNome     String? @map("cliente_nome")
+  clienteTelefone String? @map("cliente_telefone")
   endereco        String?
   bairro          String?
   referencia      String?
 
-  subtotal        Decimal        @db.Decimal(10, 2)
-  taxaEntrega     Decimal        @map("taxa_entrega") @db.Decimal(10, 2)
-  total           Decimal        @db.Decimal(10, 2)
+  subtotal    Decimal @db.Decimal(10, 2)
+  taxaEntrega Decimal @map("taxa_entrega") @db.Decimal(10, 2)
+  total       Decimal @db.Decimal(10, 2)
 
-  formaPagamento  FormaPagamento @map("forma_pagamento")
-  trocoPara       Decimal?       @map("troco_para") @db.Decimal(10, 2)
+  formaPagamento FormaPagamento @map("forma_pagamento")
+  trocoPara      Decimal?       @map("troco_para") @db.Decimal(10, 2)
 
   /// Confirmação de que o valor da entrega (pix/dinheiro/cartão) foi efetivamente recebido —
   /// obrigatória pra transição pra ENTREGUE, pra permitir conferir o caixa de cada motoboy.
-  pagamentoConfirmado        Boolean  @default(false) @map("pagamento_confirmado")
-  valorRecebido              Decimal? @map("valor_recebido") @db.Decimal(10, 2)
-  pagamentoConfirmadoPorRole String?  @map("pagamento_confirmado_por_role")
+  pagamentoConfirmado        Boolean           @default(false) @map("pagamento_confirmado")
+  valorRecebido              Decimal?          @map("valor_recebido") @db.Decimal(10, 2)
+  pagamentoConfirmadoPorRole String?           @map("pagamento_confirmado_por_role")
   /// Linhas de pagamento quando a venda é dividida em mais de uma forma (PDV, ver
   /// Empresa.pdvPermiteSplitPagamento) — quando vazio, os campos flat acima é que valem.
   pagamentos                 PedidoPagamento[]
@@ -833,8 +835,8 @@ model Pedido {
   acrescimoManual    Decimal? @map("acrescimo_manual") @db.Decimal(10, 2)
   motivoAjusteManual String?  @map("motivo_ajuste_manual")
 
-  status          StatusPedido   @default(RECEBIDO)
-  observacoes     String?
+  status      StatusPedido @default(RECEBIDO)
+  observacoes String?
 
   /// Preenchido só quando o cliente escolhe "agendar" no checkout em vez de "pedir agora" — horário desejado de entrega/retirada.
   agendadoPara DateTime? @map("agendado_para")
@@ -842,31 +844,31 @@ model Pedido {
   /// User-Agent bruto do navegador no momento do checkout — só usado pro Super Admin ver mix de dispositivo/navegador agregado da plataforma (nunca por pedido/cliente individual).
   userAgent String? @map("user_agent")
 
-  motoboyId          String?  @map("motoboy_id") @db.Uuid
-  motoboy            Motoboy? @relation(fields: [motoboyId], references: [id], onDelete: SetNull)
-  taxaEntregaMotoboy Decimal? @map("taxa_entrega_motoboy") @db.Decimal(10, 2)
-  motoboyPago        Boolean  @default(false) @map("motoboy_pago")
+  motoboyId          String?         @map("motoboy_id") @db.Uuid
+  motoboy            Motoboy?        @relation(fields: [motoboyId], references: [id], onDelete: SetNull)
+  taxaEntregaMotoboy Decimal?        @map("taxa_entrega_motoboy") @db.Decimal(10, 2)
+  motoboyPago        Boolean         @default(false) @map("motoboy_pago")
   /// Aponta pro MovimentoCaixa (SAIDA) que pagou este pedido ao motoboy — permite reconstruir
   /// período/entregas/valores exatos de um pagamento passado, em vez de só saber o total pago.
   pagamentoMotoboyId String?         @map("pagamento_motoboy_id") @db.Uuid
   pagamentoMotoboy   MovimentoCaixa? @relation("PagamentoMotoboyPedidos", fields: [pagamentoMotoboyId], references: [id], onDelete: SetNull)
   /// Foto anexada pelo motoboy como comprovante ao confirmar a entrega (ENTREGUE).
-  fotoEntrega        String?  @map("foto_entrega")
+  fotoEntrega        String?         @map("foto_entrega")
 
   // Fidelidade
-  clienteId                     String?  @map("cliente_id") @db.Uuid
-  cliente                       Cliente? @relation(fields: [clienteId], references: [id], onDelete: SetNull)
-  itemGratisResgatado           Boolean  @default(false) @map("item_gratis_resgatado")
-  unidadesFidelidadeCreditadas  Int?     @map("unidades_fidelidade_creditadas") // preenchido 1x ao entregar, evita crédito duplicado
+  clienteId                    String?  @map("cliente_id") @db.Uuid
+  cliente                      Cliente? @relation(fields: [clienteId], references: [id], onDelete: SetNull)
+  itemGratisResgatado          Boolean  @default(false) @map("item_gratis_resgatado")
+  unidadesFidelidadeCreditadas Int?     @map("unidades_fidelidade_creditadas") // preenchido 1x ao entregar, evita crédito duplicado
 
   // Pontos (Empresa.fidelidadeMetodo = PONTOS): usados (debitados do saldo, como desconto) na
   // criação do pedido; creditados (Empresa.pontosPorReal sobre o subtotal) 1x ao entregar.
-  pontosUsados       Int?     @map("pontos_usados")
-  pontosCreditados   Int?     @map("pontos_creditados")
+  pontosUsados     Int? @map("pontos_usados")
+  pontosCreditados Int? @map("pontos_creditados")
 
   // Cashback: usado (debitado do saldo, como desconto) na criação do pedido; creditado (Empresa.cashbackPercent) 1x ao entregar.
-  cashbackUsado      Decimal? @map("cashback_usado") @db.Decimal(10, 2)
-  cashbackCreditado  Decimal? @map("cashback_creditado") @db.Decimal(10, 2) // preenchido 1x ao entregar, evita crédito duplicado
+  cashbackUsado     Decimal? @map("cashback_usado") @db.Decimal(10, 2)
+  cashbackCreditado Decimal? @map("cashback_creditado") @db.Decimal(10, 2) // preenchido 1x ao entregar, evita crédito duplicado
 
   // SaltFood Coins: mesmo padrão do cashback acima, mas gravado também no ledger CoinsMovimento
   // (ver abaixo), já que o saldo é compartilhado entre lojas.
@@ -874,10 +876,10 @@ model Pedido {
   coinsCreditado Decimal? @map("coins_creditado") @db.Decimal(10, 2)
 
   // Cupom aplicado (snapshot do código, pois o cupom pode mudar/expirar depois)
-  cupomId        String?  @map("cupom_id") @db.Uuid
-  cupom          Cupom?   @relation(fields: [cupomId], references: [id], onDelete: SetNull)
-  cupomCodigo    String?  @map("cupom_codigo")
-  descontoCupom  Decimal? @map("desconto_cupom") @db.Decimal(10, 2)
+  cupomId       String?  @map("cupom_id") @db.Uuid
+  cupom         Cupom?   @relation(fields: [cupomId], references: [id], onDelete: SetNull)
+  cupomCodigo   String?  @map("cupom_codigo")
+  descontoCupom Decimal? @map("desconto_cupom") @db.Decimal(10, 2)
 
   // Avaliações (só liberadas após ENTREGUE)
   notaPedido        Int?      @map("nota_pedido")
@@ -893,11 +895,11 @@ model Pedido {
   comentarioMotoboy String?   @map("comentario_motoboy")
   motoboyAvaliadoEm DateTime? @map("motoboy_avaliado_em")
 
-  createdAt      DateTime  @default(now()) @map("created_at")
-  preparandoEm   DateTime? @map("preparando_em")
-  saiuEntregaEm  DateTime? @map("saiu_entrega_em")
-  entregueEm     DateTime? @map("entregue_em")
-  canceladoEm    DateTime? @map("cancelado_em")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  preparandoEm  DateTime? @map("preparando_em")
+  saiuEntregaEm DateTime? @map("saiu_entrega_em")
+  entregueEm    DateTime? @map("entregue_em")
+  canceladoEm   DateTime? @map("cancelado_em")
 
   itens             PedidoItem[]
   pushSubscriptions PushSubscription[]
@@ -1079,24 +1081,24 @@ enum CategoriaMovimentoCaixa {
 
 /// Tabela unificada de caixa: entradas, saídas e fechamentos de turno, tudo em um só lugar.
 model MovimentoCaixa {
-  id            String              @id @default(uuid()) @db.Uuid
-  empresaId     String              @map("empresa_id") @db.Uuid
-  empresa       Empresa             @relation(fields: [empresaId], references: [id], onDelete: Cascade)
-  motoboyId     String?             @map("motoboy_id") @db.Uuid
-  motoboy       Motoboy?            @relation(fields: [motoboyId], references: [id], onDelete: SetNull)
+  id            String             @id @default(uuid()) @db.Uuid
+  empresaId     String             @map("empresa_id") @db.Uuid
+  empresa       Empresa            @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  motoboyId     String?            @map("motoboy_id") @db.Uuid
+  motoboy       Motoboy?           @relation(fields: [motoboyId], references: [id], onDelete: SetNull)
   tipo          TipoMovimentoCaixa
   descricao     String?
-  valor         Decimal             @db.Decimal(10, 2)
-  dataMovimento DateTime            @default(now()) @map("data_movimento") @db.Date
-  createdAt     DateTime            @default(now()) @map("created_at")
+  valor         Decimal            @db.Decimal(10, 2)
+  dataMovimento DateTime           @default(now()) @map("data_movimento") @db.Date
+  createdAt     DateTime           @default(now()) @map("created_at")
 
   /// Sessão de caixa aberta no momento do lançamento — atribuída automaticamente pelo servidor
   /// (nunca vem do cliente), permite conferência/diferença por turno.
-  caixaSessaoId String?      @map("caixa_sessao_id") @db.Uuid
-  caixaSessao   CaixaSessao? @relation(fields: [caixaSessaoId], references: [id], onDelete: SetNull)
+  caixaSessaoId  String?         @map("caixa_sessao_id") @db.Uuid
+  caixaSessao    CaixaSessao?    @relation(fields: [caixaSessaoId], references: [id], onDelete: SetNull)
   /// Rastreabilidade até a venda que originou o lançamento (ex: qual Pedido gerou esta ENTRADA).
-  pedidoId      String?      @map("pedido_id") @db.Uuid
-  pedido        Pedido?      @relation(fields: [pedidoId], references: [id], onDelete: SetNull)
+  pedidoId       String?         @map("pedido_id") @db.Uuid
+  pedido         Pedido?         @relation(fields: [pedidoId], references: [id], onDelete: SetNull)
   /// Snapshot da forma de pagamento da venda — necessário pra separar "esperado em dinheiro" do
   /// resto na conferência de fechamento, principalmente quando a venda foi dividida (uma linha de
   /// MovimentoCaixa por PedidoPagamento).
@@ -1167,18 +1169,18 @@ model OperadorPdv {
 
 /// Slide do carrossel do Hero (usado só quando Empresa.heroUsarCarrossel = true).
 model HeroSlide {
-  id          String   @id @default(uuid()) @db.Uuid
-  empresaId   String   @map("empresa_id") @db.Uuid
-  empresa     Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
-  imagemUrl   String   @map("imagem_url")
-  titulo      String
-  subtitulo   String?
-  badgeLabel  String?  @map("badge_label")
-  linkUrl     String?  @map("link_url")
-  ordem       Int      @default(0)
-  ativo       Boolean  @default(true)
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  id         String   @id @default(uuid()) @db.Uuid
+  empresaId  String   @map("empresa_id") @db.Uuid
+  empresa    Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  imagemUrl  String   @map("imagem_url")
+  titulo     String
+  subtitulo  String?
+  badgeLabel String?  @map("badge_label")
+  linkUrl    String?  @map("link_url")
+  ordem      Int      @default(0)
+  ativo      Boolean  @default(true)
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
 
   @@map("hero_slides")
 }
@@ -1207,4 +1209,47 @@ model Meta {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("metas")
+}
+
+enum StatusConta {
+  PENDENTE
+  PAGO
+}
+
+/// Ledger manual de contas a pagar da loja (fornecedor, aluguel, tarifa etc.) — não integrado a
+/// gateway nenhum, o lojista só registra e marca como pago quando de fato pagar.
+model ContaPagar {
+  id             String      @id @default(uuid()) @db.Uuid
+  empresaId      String      @map("empresa_id") @db.Uuid
+  empresa        Empresa     @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  descricao      String
+  fornecedorNome String?     @map("fornecedor_nome")
+  valor          Decimal     @db.Decimal(10, 2)
+  vencimento     DateTime    @map("vencimento") @db.Date
+  status         StatusConta @default(PENDENTE)
+  pagoEm         DateTime?   @map("pago_em")
+  observacoes    String?
+  createdAt      DateTime    @default(now()) @map("created_at")
+  updatedAt      DateTime    @updatedAt @map("updated_at")
+
+  @@map("contas_pagar")
+}
+
+/// Ledger manual de contas a receber da loja (fiado, venda parcelada combinada fora do gateway
+/// etc.) — mesmo espírito de ContaPagar, sem integração com gateway nenhum.
+model ContaReceber {
+  id          String      @id @default(uuid()) @db.Uuid
+  empresaId   String      @map("empresa_id") @db.Uuid
+  empresa     Empresa     @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  descricao   String
+  clienteNome String?     @map("cliente_nome")
+  valor       Decimal     @db.Decimal(10, 2)
+  vencimento  DateTime    @map("vencimento") @db.Date
+  status      StatusConta @default(PENDENTE)
+  recebidoEm  DateTime?   @map("recebido_em")
+  observacoes String?
+  createdAt   DateTime    @default(now()) @map("created_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
+
+  @@map("contas_receber")
 }

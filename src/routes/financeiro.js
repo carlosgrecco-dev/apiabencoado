@@ -317,6 +317,88 @@ const progressoMeta = async (empresaId, tipo, produtoId) => {
 
 /**
  * @openapi
+ * /empresas/{empresaId}/financeiro/extrato:
+ *   get:
+ *     summary: Extrato cronológico — movimentos de caixa (vendas, sangrias, suprimentos) + contas a pagar/receber já baixadas no período, com saldo corrente
+ *     tags: [Financeiro]
+ *     parameters:
+ *       - in: path
+ *         name: empresaId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *       - in: query
+ *         name: de
+ *         schema: { type: string, format: date }
+ *       - in: query
+ *         name: ate
+ *         schema: { type: string, format: date }
+ *     responses:
+ *       200:
+ *         description: Extrato com saldo corrente
+ */
+router.get('/extrato', asyncHandler(async (req, res) => {
+  const empresaId = req.params.empresaId;
+  const deStr = req.query.de || todayStr();
+  const ateStr = req.query.ate || todayStr();
+  const inicio = new Date(`${deStr}T00:00:00`);
+  const fim = new Date(`${ateStr}T23:59:59.999`);
+
+  const [movimentos, pagas, recebidas] = await Promise.all([
+    prisma.movimentoCaixa.findMany({
+      where: { empresaId, dataMovimento: { gte: inicio, lte: fim } },
+      orderBy: { dataMovimento: 'asc' },
+    }),
+    prisma.contaPagar.findMany({
+      where: { empresaId, status: 'PAGO', pagoEm: { gte: inicio, lte: fim } },
+      orderBy: { pagoEm: 'asc' },
+    }),
+    prisma.contaReceber.findMany({
+      where: { empresaId, status: 'PAGO', recebidoEm: { gte: inicio, lte: fim } },
+      orderBy: { recebidoEm: 'asc' },
+    }),
+  ]);
+
+  const lancamentos = [
+    ...movimentos.map((m) => ({
+      id: `movimento-${m.id}`,
+      data: m.dataMovimento,
+      origem: 'CAIXA',
+      tipo: m.tipo,
+      descricao: m.descricao || (m.tipo === 'ENTRADA' ? 'Venda' : m.tipo),
+      valor: Number(m.valor),
+      sinal: m.tipo === 'ENTRADA' ? 1 : -1,
+    })),
+    ...pagas.map((c) => ({
+      id: `conta-pagar-${c.id}`,
+      data: c.pagoEm,
+      origem: 'CONTA_PAGAR',
+      tipo: 'SAIDA',
+      descricao: c.descricao,
+      valor: Number(c.valor),
+      sinal: -1,
+    })),
+    ...recebidas.map((c) => ({
+      id: `conta-receber-${c.id}`,
+      data: c.recebidoEm,
+      origem: 'CONTA_RECEBER',
+      tipo: 'ENTRADA',
+      descricao: c.descricao,
+      valor: Number(c.valor),
+      sinal: 1,
+    })),
+  ].sort((a, b) => new Date(a.data).getTime() - new Date(b.data).getTime());
+
+  let saldo = 0;
+  const extrato = lancamentos.map((l) => {
+    saldo += l.sinal * l.valor;
+    return { ...l, saldoAcumulado: saldo };
+  });
+
+  res.json({ lancamentos: extrato, saldoFinal: saldo });
+}));
+
+/**
+ * @openapi
  * /empresas/{empresaId}/financeiro/metas:
  *   get:
  *     summary: Metas do dia (Faturamento/Pedidos/Ticket médio + metas por produto) com progresso real de hoje
