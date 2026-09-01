@@ -42,17 +42,28 @@ async function finalizarComoEntregue(tx, { pedido, empresaId, empresa, pagamento
     });
   }
 
-  // Credita fidelidade (1x por pedido, guardado por unidadesFidelidadeCreditadas).
+  // Credita fidelidade (1x por pedido, guardado por unidadesFidelidadeCreditadas). O nível
+  // (Bronze/Prata/Ouro) sempre segue totalUnidadesCompradas, nos dois métodos — só a recompensa
+  // resgatável muda: método CARIMBO usa o contador de itens grátis já calculado acima; método
+  // PONTOS credita, além disso, pontos sobre o subtotal (Empresa.pontosPorReal) em Cliente.saldoPontos.
   if (salvo.clienteId && salvo.unidadesFidelidadeCreditadas == null) {
     const unidades = salvo.itens.reduce((sum, item) => sum + item.quantidade, 0);
     await creditarUnidadesFidelidade(tx, salvo.clienteId, unidades);
-    await tx.pedido.update({
-      where: { id: salvo.id },
-      data: { unidadesFidelidadeCreditadas: unidades },
-    });
+    const dadosFidelidade = { unidadesFidelidadeCreditadas: unidades };
+
+    if (empresa.fidelidadeMetodo === 'PONTOS') {
+      const pontosPorReal = empresa.pontosPorReal != null ? Number(empresa.pontosPorReal) : 1;
+      const pontos = Math.floor(Number(salvo.subtotal) * pontosPorReal);
+      if (pontos > 0) {
+        await tx.cliente.update({ where: { id: salvo.clienteId }, data: { saldoPontos: { increment: pontos } } });
+      }
+      dadosFidelidade.pontosCreditados = pontos;
+    }
+
+    await tx.pedido.update({ where: { id: salvo.id }, data: dadosFidelidade });
     // Reflete no objeto que a rota devolve — sem isso, o response deste PATCH ficava com o
     // valor antigo mesmo já tendo sido atualizado no banco acima.
-    salvo = { ...salvo, unidadesFidelidadeCreditadas: unidades };
+    salvo = { ...salvo, ...dadosFidelidade };
   }
 
   // Credita cashback sobre o subtotal (1x por pedido, guardado por cashbackCreditado).

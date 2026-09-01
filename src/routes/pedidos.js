@@ -346,7 +346,7 @@ router.patch('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
 router.post('/', asyncHandler(async (req, res) => {
   const {
     clienteNome, clienteTelefone, endereco, bairro, referencia,
-    formaPagamento, trocoPara, observacoes, itens, usarItemGratis, cupomCodigo, agendadoPara, usarCashback, usarCoins,
+    formaPagamento, trocoPara, observacoes, itens, usarItemGratis, cupomCodigo, agendadoPara, usarCashback, usarCoins, usarPontos,
     tipoPedido, mesaIdentificador,
   } = req.body;
 
@@ -456,6 +456,9 @@ router.post('/', asyncHandler(async (req, res) => {
       return res.status(400).json({ error: 'Cliente informado não pertence a esta empresa' });
     }
     if (usarItemGratis) {
+      if (req.empresa.fidelidadeMetodo !== 'CARIMBO') {
+        return res.status(400).json({ error: 'Esta loja não usa o resgate por item grátis — o programa de fidelidade dela é por pontos' });
+      }
       const { disponiveis, expirado } = disponibilidadeFidelidade(cliente, req.empresa);
       if (disponiveis <= 0) {
         return res.status(400).json({
@@ -501,6 +504,35 @@ router.post('/', asyncHandler(async (req, res) => {
     }
     cashbackUsadoValor = Math.min(valorSolicitado, subtotal);
     subtotal = Math.max(0, subtotal - cashbackUsadoValor);
+  }
+
+  let pontosUsadosQtd = 0;
+  if (usarPontos) {
+    if (req.empresa.fidelidadeMetodo !== 'PONTOS') {
+      return res.status(400).json({ error: 'Esta loja não usa resgate por pontos — o programa de fidelidade dela é por carimbos' });
+    }
+    if (!cliente) {
+      return res.status(400).json({ error: 'É preciso estar logado para usar pontos de fidelidade' });
+    }
+    const quantidadeSolicitada = Number(usarPontos);
+    if (!Number.isInteger(quantidadeSolicitada) || quantidadeSolicitada <= 0) {
+      return res.status(400).json({ error: 'Campo "usarPontos" deve ser um número inteiro maior que zero' });
+    }
+    if (quantidadeSolicitada > cliente.saldoPontos) {
+      return res.status(400).json({ error: 'Saldo de pontos insuficiente' });
+    }
+    const resgateMinimo = req.empresa.pontosResgateMinimo || 0;
+    if (resgateMinimo > 0 && cliente.saldoPontos < resgateMinimo) {
+      return res.status(400).json({ error: `É preciso ter pelo menos ${resgateMinimo} pontos para resgatar` });
+    }
+    const valorPorPonto = req.empresa.pontosValorReal != null ? Number(req.empresa.pontosValorReal) : 0;
+    if (valorPorPonto <= 0) {
+      return res.status(400).json({ error: 'O resgate de pontos não está configurado nesta loja' });
+    }
+    const valorSolicitado = quantidadeSolicitada * valorPorPonto;
+    const descontoAplicavel = Math.min(valorSolicitado, subtotal);
+    pontosUsadosQtd = Math.round(descontoAplicavel / valorPorPonto);
+    subtotal = Math.max(0, subtotal - descontoAplicavel);
   }
 
   // SaltFood Coins — em paralelo ao cashback local acima, aplicado depois dele sobre o subtotal
@@ -567,6 +599,7 @@ router.post('/', asyncHandler(async (req, res) => {
           cupomCodigo: cupomAplicado?.codigo || null,
           descontoCupom,
           cashbackUsado: cashbackUsadoValor > 0 ? cashbackUsadoValor : null,
+          pontosUsados: pontosUsadosQtd > 0 ? pontosUsadosQtd : null,
           coinsUsado: coinsUsadoValor > 0 ? coinsUsadoValor : null,
           itens: { create: itensParaCriar },
         },
@@ -577,6 +610,13 @@ router.post('/', asyncHandler(async (req, res) => {
         await tx.cliente.update({
           where: { id: cliente.id },
           data: { itensGratisResgatados: { increment: 1 } },
+        });
+      }
+
+      if (pontosUsadosQtd > 0) {
+        await tx.cliente.update({
+          where: { id: cliente.id },
+          data: { saldoPontos: { decrement: pontosUsadosQtd } },
         });
       }
 

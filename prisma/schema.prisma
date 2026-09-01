@@ -72,10 +72,31 @@ model Empresa {
   googleBusinessReviewUrl String? @map("google_business_review_url")
 
   // Programa de fidelidade (CMS)
+  /// CARIMBO (padrão, comportamento de sempre) = a cada 10 unidades compradas, a 11ª é grátis.
+  /// PONTOS = a cada R$1 gasto (pontosPorReal), credita pontos em Cliente.saldoPontos, resgatáveis
+  /// como desconto em dinheiro (pontosValorReal) a partir de pontosResgateMinimo. O nível
+  /// (Bronze/Prata/Ouro) continua calculado por totalUnidadesCompradas nos dois métodos.
+  fidelidadeMetodo       FidelidadeMetodo @default(CARIMBO) @map("fidelidade_metodo")
+  /// Liga/desliga o programa inteiro (nos dois métodos) sem apagar nenhuma configuração.
+  fidelidadeAtiva        Boolean @default(true) @map("fidelidade_ativa")
+  fidelidadeNomePrograma String? @map("fidelidade_nome_programa") // ex: "Fidelidade Acarajé o Abençoado"; vazio = usa Empresa.nome
   fidelidadeLogoUrl      String? @map("fidelidade_logo_url") // se vazio, usa o logoUrl da loja
-  fidelidadeValidadeDias Int?    @map("fidelidade_validade_dias") // prazo p/ resgatar o item grátis após ganhar; null = sem prazo
+  fidelidadeValidadeDias Int?    @map("fidelidade_validade_dias") // prazo p/ resgatar o item grátis após ganhar (método CARIMBO); null = sem prazo
   fidelidadeAvisoFaltam  Int?    @map("fidelidade_aviso_faltam") // dispara aviso na loja quando faltar X unidades p/ o prêmio
   fidelidadeNomeItem     String? @map("fidelidade_nome_item") // nome genérico usado nas mensagens, ex: "lanches"
+  /// Termos e condições do programa, texto livre exibido ao cliente — opcional.
+  fidelidadeTermos       String? @map("fidelidade_termos")
+  /// Limites de totalUnidadesCompradas pros níveis Prata/Ouro — configuráveis por loja (padrão 20/50, igual ao histórico fixo).
+  fidelidadeLimitePrata  Int     @default(20) @map("fidelidade_limite_prata")
+  fidelidadeLimiteOuro   Int     @default(50) @map("fidelidade_limite_ouro")
+
+  // Método PONTOS (só usado quando fidelidadeMetodo = PONTOS)
+  pontosNomeMoeda     String?  @default("pts") @map("pontos_nome_moeda") // rótulo exibido ao cliente, ex: "pts", "estrelas"
+  pontosPorReal       Decimal? @default(1) @map("pontos_por_real") @db.Decimal(6, 2) // quantos pontos credita por R$1 do subtotal
+  /// Política de validade declarada ao cliente — sem ledger de pontos por data, não há expiração automática aplicada ainda.
+  pontosValidadeMeses Int?     @map("pontos_validade_meses")
+  pontosResgateMinimo Int?     @map("pontos_resgate_minimo") // saldo mínimo de pontos pra poder resgatar
+  pontosValorReal     Decimal? @map("pontos_valor_real") @db.Decimal(6, 4) // quanto vale 1 ponto em R$ no resgate
 
   /// Percentual de cashback (0-100) creditado no saldo do cliente sobre o subtotal de cada pedido ENTREGUE. 0/null = desativado.
   cashbackPercent Decimal? @map("cashback_percent") @db.Decimal(5, 2)
@@ -397,6 +418,10 @@ model Cliente {
   itensGratisResgatados  Int       @default(0) @map("itens_gratis_resgatados")
   /// Quando o item grátis mais recente foi liberado — usado para calcular o prazo de validade (Empresa.fidelidadeValidadeDias).
   itemGratisGanhoEm      DateTime? @map("item_gratis_ganho_em")
+
+  /// Saldo de pontos — só usado/exibido quando Empresa.fidelidadeMetodo = PONTOS. Creditado sobre
+  /// o subtotal (Empresa.pontosPorReal) ao entregar, debitado como desconto num pedido futuro.
+  saldoPontos            Int       @default(0) @map("saldo_pontos")
 
   // Indicação: cada cliente tem um código próprio pra compartilhar; quem se cadastra usando o
   // código de alguém fica marcado como indicado, e os dois ganham unidades de fidelidade quando
@@ -741,6 +766,12 @@ enum FormaPagamento {
   MULTIPLO
 }
 
+/// Método de recompensa do programa de fidelidade da loja — ver Empresa.fidelidadeMetodo.
+enum FidelidadeMetodo {
+  CARIMBO
+  PONTOS
+}
+
 enum StatusPedido {
   RECEBIDO
   PREPARANDO
@@ -825,6 +856,11 @@ model Pedido {
   cliente                       Cliente? @relation(fields: [clienteId], references: [id], onDelete: SetNull)
   itemGratisResgatado           Boolean  @default(false) @map("item_gratis_resgatado")
   unidadesFidelidadeCreditadas  Int?     @map("unidades_fidelidade_creditadas") // preenchido 1x ao entregar, evita crédito duplicado
+
+  // Pontos (Empresa.fidelidadeMetodo = PONTOS): usados (debitados do saldo, como desconto) na
+  // criação do pedido; creditados (Empresa.pontosPorReal sobre o subtotal) 1x ao entregar.
+  pontosUsados       Int?     @map("pontos_usados")
+  pontosCreditados   Int?     @map("pontos_creditados")
 
   // Cashback: usado (debitado do saldo, como desconto) na criação do pedido; creditado (Empresa.cashbackPercent) 1x ao entregar.
   cashbackUsado      Decimal? @map("cashback_usado") @db.Decimal(10, 2)

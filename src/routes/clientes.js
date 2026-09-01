@@ -328,9 +328,11 @@ router.get('/admin-resumo', requireEmpresaAdmin(), asyncHandler(async (req, res)
     ativo: ativosSet.has(c.id),
   }));
 
-  /** Economia gerada pra fidelidade (cashback usado + valor do item grátis) num intervalo — só o que dá pra reconstruir com dado real, sem tabela de log dedicada. */
+  const pontosValorReal = req.empresa.pontosValorReal != null ? Number(req.empresa.pontosValorReal) : 0;
+
+  /** Economia gerada pra fidelidade (cashback usado + valor do item grátis/pontos resgatados) num intervalo — só o que dá pra reconstruir com dado real, sem tabela de log dedicada. */
   const economiaNoIntervalo = async (inicio, fim) => {
-    const [cashbackAgg, pedidosGratis] = await Promise.all([
+    const [cashbackAgg, pedidosGratis, pontosUsadosAgg] = await Promise.all([
       prisma.pedido.aggregate({
         where: { empresaId, createdAt: { gte: inicio, lte: fim }, cashbackUsado: { not: null } },
         _sum: { cashbackUsado: true },
@@ -339,12 +341,17 @@ router.get('/admin-resumo', requireEmpresaAdmin(), asyncHandler(async (req, res)
         where: { empresaId, createdAt: { gte: inicio, lte: fim }, itemGratisResgatado: true },
         include: { itens: { select: { precoUnitario: true } } },
       }),
+      prisma.pedido.aggregate({
+        where: { empresaId, createdAt: { gte: inicio, lte: fim }, pontosUsados: { not: null } },
+        _sum: { pontosUsados: true },
+      }),
     ]);
     const valorItensGratis = pedidosGratis.reduce((soma, p) => {
       if (p.itens.length === 0) return soma;
       return soma + Math.min(...p.itens.map((i) => Number(i.precoUnitario)));
     }, 0);
-    return Number(cashbackAgg._sum.cashbackUsado || 0) + valorItensGratis;
+    const valorPontosUsados = (pontosUsadosAgg._sum.pontosUsados || 0) * pontosValorReal;
+    return Number(cashbackAgg._sum.cashbackUsado || 0) + valorItensGratis + valorPontosUsados;
   };
 
   const carimbosNoIntervalo = async (inicio, fim) => {
@@ -359,10 +366,28 @@ router.get('/admin-resumo', requireEmpresaAdmin(), asyncHandler(async (req, res)
     where: { empresaId, createdAt: { gte: inicio, lte: fim }, itemGratisResgatado: true },
   });
 
+  const pontosEmitidosNoIntervalo = async (inicio, fim) => {
+    const agg = await prisma.pedido.aggregate({
+      where: { empresaId, status: 'ENTREGUE', entregueEm: { gte: inicio, lte: fim }, pontosCreditados: { not: null } },
+      _sum: { pontosCreditados: true },
+    });
+    return agg._sum.pontosCreditados || 0;
+  };
+
+  const pontosResgatadosNoIntervalo = async (inicio, fim) => {
+    const agg = await prisma.pedido.aggregate({
+      where: { empresaId, createdAt: { gte: inicio, lte: fim }, pontosUsados: { not: null } },
+      _sum: { pontosUsados: true },
+    });
+    return agg._sum.pontosUsados || 0;
+  };
+
   const [
     carimbosAtual, carimbosAnterior,
     resgatesAtual, resgatesAnterior,
     economiaAtual, economiaAnterior,
+    pontosEmitidosAtual, pontosEmitidosAnterior,
+    pontosResgatadosAtual, pontosResgatadosAnterior,
   ] = await Promise.all([
     carimbosNoIntervalo(inicioAtual, fimAtual),
     carimbosNoIntervalo(inicioAnterior, fimAnterior),
@@ -370,6 +395,10 @@ router.get('/admin-resumo', requireEmpresaAdmin(), asyncHandler(async (req, res)
     resgatesNoIntervalo(inicioAnterior, fimAnterior),
     economiaNoIntervalo(inicioAtual, fimAtual),
     economiaNoIntervalo(inicioAnterior, fimAnterior),
+    pontosEmitidosNoIntervalo(inicioAtual, fimAtual),
+    pontosEmitidosNoIntervalo(inicioAnterior, fimAnterior),
+    pontosResgatadosNoIntervalo(inicioAtual, fimAtual),
+    pontosResgatadosNoIntervalo(inicioAnterior, fimAnterior),
   ]);
 
   const clientesCadastradosAtual = clientes.length;
@@ -390,6 +419,8 @@ router.get('/admin-resumo', requireEmpresaAdmin(), asyncHandler(async (req, res)
         { itemGratisResgatado: true },
         { cashbackUsado: { not: null } },
         { cashbackCreditado: { not: null } },
+        { pontosCreditados: { not: null } },
+        { pontosUsados: { not: null } },
       ],
     },
     orderBy: { createdAt: 'desc' },
@@ -406,8 +437,14 @@ router.get('/admin-resumo', requireEmpresaAdmin(), asyncHandler(async (req, res)
     if (p.cashbackUsado != null) {
       atividades.push({ tipo: 'CASHBACK_USADO', clienteNome: nome, valor: Number(p.cashbackUsado), pedidoNumero: p.numero, data: p.createdAt });
     }
+    if (p.pontosUsados) {
+      atividades.push({ tipo: 'PONTOS_USADOS', clienteNome: nome, unidades: p.pontosUsados, pedidoNumero: p.numero, data: p.createdAt });
+    }
     if (p.unidadesFidelidadeCreditadas) {
       atividades.push({ tipo: 'CARIMBO', clienteNome: nome, unidades: p.unidadesFidelidadeCreditadas, pedidoNumero: p.numero, data: p.entregueEm || p.createdAt });
+    }
+    if (p.pontosCreditados) {
+      atividades.push({ tipo: 'PONTOS_CREDITADOS', clienteNome: nome, unidades: p.pontosCreditados, pedidoNumero: p.numero, data: p.entregueEm || p.createdAt });
     }
     if (p.cashbackCreditado != null) {
       atividades.push({ tipo: 'CASHBACK_CREDITADO', clienteNome: nome, valor: Number(p.cashbackCreditado), pedidoNumero: p.numero, data: p.entregueEm || p.createdAt });
@@ -423,19 +460,105 @@ router.get('/admin-resumo', requireEmpresaAdmin(), asyncHandler(async (req, res)
       clientesAtivosPercent: clientes.length > 0 ? (ativosSet.size / clientes.length) * 100 : 0,
       carimbosEmitidos: { atual: carimbosAtual, anterior: carimbosAnterior },
       itensGratisResgatados: { atual: resgatesAtual, anterior: resgatesAnterior },
+      pontosEmitidos: { atual: pontosEmitidosAtual, anterior: pontosEmitidosAnterior },
+      pontosResgatados: { atual: pontosResgatadosAtual, anterior: pontosResgatadosAnterior },
       economiaGerada: { atual: economiaAtual, anterior: economiaAnterior },
     },
     clientes: clientesComDados,
     ranking,
     atividadesRecentes: atividades.slice(0, 10),
     config: {
+      fidelidadeMetodo: req.empresa.fidelidadeMetodo,
+      fidelidadeAtiva: req.empresa.fidelidadeAtiva,
+      fidelidadeNomePrograma: req.empresa.fidelidadeNomePrograma,
       fidelidadeValidadeDias: req.empresa.fidelidadeValidadeDias,
+      fidelidadeTermos: req.empresa.fidelidadeTermos,
+      fidelidadeLimitePrata: req.empresa.fidelidadeLimitePrata,
+      fidelidadeLimiteOuro: req.empresa.fidelidadeLimiteOuro,
       cashbackPercent: req.empresa.cashbackPercent != null ? Number(req.empresa.cashbackPercent) : 0,
       fidelidadeNomeItem: req.empresa.fidelidadeNomeItem,
       indicacaoRecompensaUnidades: req.empresa.indicacaoRecompensaUnidades,
       unidadesParaPremio: 10,
+      pontosNomeMoeda: req.empresa.pontosNomeMoeda,
+      pontosPorReal: req.empresa.pontosPorReal != null ? Number(req.empresa.pontosPorReal) : 1,
+      pontosValidadeMeses: req.empresa.pontosValidadeMeses,
+      pontosResgateMinimo: req.empresa.pontosResgateMinimo,
+      pontosValorReal,
     },
   });
+}));
+
+/**
+ * @openapi
+ * /empresas/{empresaId}/clientes/fidelidade/zerar:
+ *   post:
+ *     summary: Zera o progresso de fidelidade de TODOS os clientes da loja (pontos ou carimbos, conforme o método ativo) — ação em lote e irreversível
+ *     tags: [Clientes]
+ *     parameters:
+ *       - in: path
+ *         name: empresaId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Progresso zerado
+ */
+router.post('/fidelidade/zerar', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+  const empresaId = req.params.empresaId;
+  if (req.empresa.fidelidadeMetodo === 'PONTOS') {
+    await prisma.cliente.updateMany({ where: { empresaId }, data: { saldoPontos: 0 } });
+  } else {
+    await prisma.cliente.updateMany({
+      where: { empresaId },
+      data: { totalUnidadesCompradas: 0, itensGratisGanhos: 0, itensGratisResgatados: 0, itemGratisGanhoEm: null },
+    });
+  }
+  res.json({ ok: true });
+}));
+
+/**
+ * @openapi
+ * /empresas/{empresaId}/clientes/fidelidade/ajustar-em-lote:
+ *   post:
+ *     summary: Soma (ou subtrai, com valor negativo) uma quantidade de pontos/carimbos pra TODOS os clientes da loja de uma vez, conforme o método ativo — nunca deixa o saldo de ninguém ficar negativo
+ *     tags: [Clientes]
+ *     parameters:
+ *       - in: path
+ *         name: empresaId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [valor]
+ *             properties:
+ *               valor: { type: integer, description: "Inteiro diferente de zero; negativo pra subtrair" }
+ *     responses:
+ *       200:
+ *         description: Ajuste aplicado
+ *       400:
+ *         description: Valor inválido
+ */
+router.post('/fidelidade/ajustar-em-lote', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+  const empresaId = req.params.empresaId;
+  const quantidade = Number(req.body.valor);
+  if (!Number.isInteger(quantidade) || quantidade === 0) {
+    return res.status(400).json({ error: 'Campo "valor" deve ser um inteiro diferente de zero' });
+  }
+  if (req.empresa.fidelidadeMetodo === 'PONTOS') {
+    await prisma.$executeRaw`UPDATE clientes SET saldo_pontos = GREATEST(0, saldo_pontos + ${quantidade}) WHERE empresa_id = ${empresaId}::uuid`;
+  } else {
+    await prisma.$executeRaw`
+      UPDATE clientes
+      SET total_unidades_compradas = GREATEST(0, total_unidades_compradas + ${quantidade}),
+          itens_gratis_ganhos = FLOOR(GREATEST(0, total_unidades_compradas + ${quantidade}) / 10)
+      WHERE empresa_id = ${empresaId}::uuid
+    `;
+  }
+  res.json({ ok: true });
 }));
 
 /**
@@ -647,6 +770,57 @@ router.post('/:id/adicionar-unidades', requireEmpresaAdmin(), asyncHandler(async
   }
 
   const atualizado = await prisma.$transaction((tx) => creditarUnidadesFidelidade(tx, cliente.id, unidades));
+
+  res.json(serializeCliente(atualizado));
+}));
+
+/**
+ * @openapi
+ * /empresas/{empresaId}/clientes/{id}/adicionar-pontos:
+ *   post:
+ *     summary: Credita pontos manualmente no saldo do cliente (bônus avulso, correção, compra por telefone/balcão) — só faz sentido quando Empresa.fidelidadeMetodo = PONTOS
+ *     tags: [Clientes]
+ *     parameters:
+ *       - in: path
+ *         name: empresaId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [pontos]
+ *             properties:
+ *               pontos: { type: integer, minimum: 1 }
+ *     responses:
+ *       200:
+ *         description: Pontos creditados
+ *       400:
+ *         description: Campo "pontos" inválido
+ *       404:
+ *         description: Cliente não encontrado
+ */
+router.post('/:id/adicionar-pontos', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+  const pontos = Number(req.body.pontos);
+  if (!Number.isInteger(pontos) || pontos < 1) {
+    return res.status(400).json({ error: 'Campo "pontos" deve ser um número inteiro maior que zero' });
+  }
+
+  const cliente = await prisma.cliente.findFirst({ where: { id: req.params.id, empresaId: req.params.empresaId } });
+  if (!cliente) {
+    return res.status(404).json({ error: 'Cliente não encontrado' });
+  }
+
+  const atualizado = await prisma.cliente.update({
+    where: { id: cliente.id },
+    data: { saldoPontos: { increment: pontos } },
+  });
 
   res.json(serializeCliente(atualizado));
 }));

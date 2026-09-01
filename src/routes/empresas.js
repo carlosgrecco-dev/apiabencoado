@@ -1497,11 +1497,23 @@ router.put('/:id/frete-config', requireEmpresaAdmin('id'), asyncHandler(async (r
  *           schema:
  *             type: object
  *             properties:
+ *               fidelidadeMetodo: { type: string, enum: [CARIMBO, PONTOS] }
+ *               fidelidadeAtiva: { type: boolean }
+ *               fidelidadeNomePrograma: { type: string, nullable: true }
  *               fidelidadeLogoUrl: { type: string, nullable: true }
  *               fidelidadeValidadeDias: { type: integer, nullable: true }
  *               fidelidadeAvisoFaltam: { type: integer, nullable: true }
  *               fidelidadeNomeItem: { type: string, nullable: true }
+ *               fidelidadeTermos: { type: string, nullable: true }
+ *               fidelidadeLimitePrata: { type: integer }
+ *               fidelidadeLimiteOuro: { type: integer }
+ *               pontosNomeMoeda: { type: string, nullable: true }
+ *               pontosPorReal: { type: number, nullable: true }
+ *               pontosValidadeMeses: { type: integer, nullable: true }
+ *               pontosResgateMinimo: { type: integer, nullable: true }
+ *               pontosValorReal: { type: number, nullable: true }
  *               cashbackPercent: { type: number, nullable: true }
+ *               indicacaoRecompensaUnidades: { type: integer }
  *     responses:
  *       200:
  *         description: Configuração atualizada
@@ -1511,9 +1523,17 @@ router.put('/:id/frete-config', requireEmpresaAdmin('id'), asyncHandler(async (r
  *         description: Empresa não encontrada
  */
 router.put('/:id/fidelidade-config', requireEmpresaAdmin('id'), asyncHandler(async (req, res) => {
-  const { fidelidadeLogoUrl, fidelidadeValidadeDias, fidelidadeAvisoFaltam, fidelidadeNomeItem, cashbackPercent } = req.body;
+  const {
+    fidelidadeMetodo, fidelidadeAtiva, fidelidadeNomePrograma, fidelidadeLogoUrl, fidelidadeValidadeDias,
+    fidelidadeAvisoFaltam, fidelidadeNomeItem, fidelidadeTermos, fidelidadeLimitePrata, fidelidadeLimiteOuro,
+    pontosNomeMoeda, pontosPorReal, pontosValidadeMeses, pontosResgateMinimo, pontosValorReal, cashbackPercent,
+    indicacaoRecompensaUnidades,
+  } = req.body;
 
   const erros = [];
+  if (fidelidadeMetodo !== undefined && !['CARIMBO', 'PONTOS'].includes(fidelidadeMetodo)) {
+    erros.push('Campo "fidelidadeMetodo" deve ser um de: CARIMBO, PONTOS');
+  }
   if (fidelidadeValidadeDias !== undefined && fidelidadeValidadeDias !== null && fidelidadeValidadeDias !== '') {
     if (!Number.isInteger(Number(fidelidadeValidadeDias)) || Number(fidelidadeValidadeDias) < 1) {
       erros.push('Campo "fidelidadeValidadeDias" deve ser um inteiro maior ou igual a 1');
@@ -1525,11 +1545,36 @@ router.put('/:id/fidelidade-config', requireEmpresaAdmin('id'), asyncHandler(asy
       erros.push('Campo "fidelidadeAvisoFaltam" deve ser um inteiro entre 1 e 9');
     }
   }
+  if (fidelidadeLimitePrata !== undefined && (!Number.isInteger(Number(fidelidadeLimitePrata)) || Number(fidelidadeLimitePrata) < 1)) {
+    erros.push('Campo "fidelidadeLimitePrata" deve ser um inteiro maior ou igual a 1');
+  }
+  if (fidelidadeLimiteOuro !== undefined && (!Number.isInteger(Number(fidelidadeLimiteOuro)) || Number(fidelidadeLimiteOuro) <= Number(fidelidadeLimitePrata ?? 0))) {
+    erros.push('Campo "fidelidadeLimiteOuro" deve ser um inteiro maior que o limite de Prata');
+  }
+  if (pontosPorReal !== undefined && pontosPorReal !== null && pontosPorReal !== '' && (Number.isNaN(Number(pontosPorReal)) || Number(pontosPorReal) <= 0)) {
+    erros.push('Campo "pontosPorReal" deve ser um número maior que zero');
+  }
+  if (pontosValidadeMeses !== undefined && pontosValidadeMeses !== null && pontosValidadeMeses !== '') {
+    if (!Number.isInteger(Number(pontosValidadeMeses)) || Number(pontosValidadeMeses) < 1) {
+      erros.push('Campo "pontosValidadeMeses" deve ser um inteiro maior ou igual a 1');
+    }
+  }
+  if (pontosResgateMinimo !== undefined && pontosResgateMinimo !== null && pontosResgateMinimo !== '') {
+    if (!Number.isInteger(Number(pontosResgateMinimo)) || Number(pontosResgateMinimo) < 1) {
+      erros.push('Campo "pontosResgateMinimo" deve ser um inteiro maior ou igual a 1');
+    }
+  }
+  if (pontosValorReal !== undefined && pontosValorReal !== null && pontosValorReal !== '' && (Number.isNaN(Number(pontosValorReal)) || Number(pontosValorReal) <= 0)) {
+    erros.push('Campo "pontosValorReal" deve ser um número maior que zero');
+  }
   if (cashbackPercent !== undefined && cashbackPercent !== null && cashbackPercent !== '') {
     const valor = Number(cashbackPercent);
     if (Number.isNaN(valor) || valor < 0 || valor > 100) {
       erros.push('Campo "cashbackPercent" deve ser um número entre 0 e 100');
     }
+  }
+  if (indicacaoRecompensaUnidades !== undefined && (!Number.isInteger(Number(indicacaoRecompensaUnidades)) || Number(indicacaoRecompensaUnidades) < 1)) {
+    erros.push('Campo "indicacaoRecompensaUnidades" deve ser um inteiro maior que zero');
   }
   if (erros.length) {
     return res.status(400).json({ error: erros.join('; ') });
@@ -1539,6 +1584,10 @@ router.put('/:id/fidelidade-config', requireEmpresaAdmin('id'), asyncHandler(asy
     const empresa = await prisma.empresa.update({
       where: { id: req.params.id },
       data: {
+        ...(fidelidadeMetodo !== undefined ? { fidelidadeMetodo } : {}),
+        ...(indicacaoRecompensaUnidades !== undefined ? { indicacaoRecompensaUnidades: Number(indicacaoRecompensaUnidades) } : {}),
+        ...(fidelidadeAtiva !== undefined ? { fidelidadeAtiva: Boolean(fidelidadeAtiva) } : {}),
+        ...(fidelidadeNomePrograma !== undefined ? { fidelidadeNomePrograma: fidelidadeNomePrograma || null } : {}),
         ...(fidelidadeLogoUrl !== undefined ? { fidelidadeLogoUrl: fidelidadeLogoUrl || null } : {}),
         ...(fidelidadeValidadeDias !== undefined
           ? { fidelidadeValidadeDias: fidelidadeValidadeDias === null || fidelidadeValidadeDias === '' ? null : Number(fidelidadeValidadeDias) }
@@ -1547,6 +1596,22 @@ router.put('/:id/fidelidade-config', requireEmpresaAdmin('id'), asyncHandler(asy
           ? { fidelidadeAvisoFaltam: fidelidadeAvisoFaltam === null || fidelidadeAvisoFaltam === '' ? null : Number(fidelidadeAvisoFaltam) }
           : {}),
         ...(fidelidadeNomeItem !== undefined ? { fidelidadeNomeItem: fidelidadeNomeItem || null } : {}),
+        ...(fidelidadeTermos !== undefined ? { fidelidadeTermos: fidelidadeTermos || null } : {}),
+        ...(fidelidadeLimitePrata !== undefined ? { fidelidadeLimitePrata: Number(fidelidadeLimitePrata) } : {}),
+        ...(fidelidadeLimiteOuro !== undefined ? { fidelidadeLimiteOuro: Number(fidelidadeLimiteOuro) } : {}),
+        ...(pontosNomeMoeda !== undefined ? { pontosNomeMoeda: pontosNomeMoeda || null } : {}),
+        ...(pontosPorReal !== undefined
+          ? { pontosPorReal: pontosPorReal === null || pontosPorReal === '' ? null : Number(pontosPorReal) }
+          : {}),
+        ...(pontosValidadeMeses !== undefined
+          ? { pontosValidadeMeses: pontosValidadeMeses === null || pontosValidadeMeses === '' ? null : Number(pontosValidadeMeses) }
+          : {}),
+        ...(pontosResgateMinimo !== undefined
+          ? { pontosResgateMinimo: pontosResgateMinimo === null || pontosResgateMinimo === '' ? null : Number(pontosResgateMinimo) }
+          : {}),
+        ...(pontosValorReal !== undefined
+          ? { pontosValorReal: pontosValorReal === null || pontosValorReal === '' ? null : Number(pontosValorReal) }
+          : {}),
         ...(cashbackPercent !== undefined
           ? { cashbackPercent: cashbackPercent === null || cashbackPercent === '' ? null : Number(cashbackPercent) }
           : {}),
