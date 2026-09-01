@@ -606,6 +606,8 @@ model Produto {
   esgotadoHoje     Boolean  @default(false) @map("esgotado_hoje") // pausa rápida sem desativar/excluir o produto
   controlarEstoque Boolean  @default(false) @map("controlar_estoque")
   estoqueQtd       Int?     @map("estoque_qtd") // só relevante quando controlarEstoque=true
+  /// Dispara alerta de estoque baixo no dashboard quando estoqueQtd cai a este nível ou abaixo — opcional, sem alerta se null.
+  estoqueMinimo    Int?     @map("estoque_minimo")
 
   createdAt        DateTime @default(now()) @map("created_at")
   updatedAt        DateTime @updatedAt @map("updated_at")
