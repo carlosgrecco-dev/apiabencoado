@@ -128,7 +128,7 @@ router.get('/', asyncHandler(async (req, res) => {
   }
   const motoboyIdFiltro = req.auth.role === 'MOTOBOY' ? req.auth.motoboyId : req.query.motoboyId;
 
-  const { status, motoboyPago, de, ate, tipoPedido, clienteId } = req.query;
+  const { status, motoboyPago, de, ate, tipoPedido, clienteId, comAvaliacao, notaMax } = req.query;
 
   if (status && !STATUS_VALIDOS.includes(status)) {
     return res.status(400).json({ error: `Campo "status" deve ser um de: ${STATUS_VALIDOS.join(', ')}` });
@@ -144,6 +144,9 @@ router.get('/', asyncHandler(async (req, res) => {
     ...(motoboyIdFiltro ? { motoboyId: motoboyIdFiltro } : {}),
     ...(clienteId ? { clienteId } : {}),
     ...(motoboyPago !== undefined ? { motoboyPago: motoboyPago === 'true' } : {}),
+    ...(comAvaliacao === 'true' || notaMax !== undefined
+      ? { notaPedido: { ...(comAvaliacao === 'true' ? { not: null } : {}), ...(notaMax !== undefined ? { lte: Number(notaMax) } : {}) } }
+      : {}),
     ...(de || ate
       ? {
         createdAt: {

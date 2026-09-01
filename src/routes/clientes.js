@@ -6,6 +6,7 @@ const { disponibilidadeFidelidade, creditarUnidadesFidelidade } = require('../li
 const { gerarCodigoIndicacaoUnico } = require('../lib/indicacao');
 const { signToken, requireEmpresaAdmin, requireCliente } = require('../lib/auth');
 const { criarContaIsolada, buscarContaPorEmail, confirmarVinculo } = require('../lib/contaPlataforma');
+const { calcularRfm, RFM_SEGMENT_LABELS } = require('../lib/rfm');
 
 const router = Router({ mergeParams: true });
 
@@ -486,6 +487,63 @@ router.get('/admin-resumo', requireEmpresaAdmin(), asyncHandler(async (req, res)
       pontosValorReal,
     },
   });
+}));
+
+/**
+ * @openapi
+ * /empresas/{empresaId}/clientes/rfm:
+ *   get:
+ *     summary: Classificação RFM (Recência/Frequência/Monetário) por cliente, com o segmento de cada um — mesma fonte usada no resumo do Dashboard, aqui com o detalhe por cliente pra navegar/filtrar por segmento
+ *     tags: [Clientes]
+ *     parameters:
+ *       - in: path
+ *         name: empresaId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Lista de clientes classificados por segmento RFM
+ */
+router.get('/rfm', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+  const empresaId = req.params.empresaId;
+  const agora = new Date();
+
+  const rfmGroup = await prisma.pedido.groupBy({
+    by: ['clienteId'],
+    where: { empresaId, clienteId: { not: null }, status: 'ENTREGUE' },
+    _count: { _all: true },
+    _sum: { total: true },
+    _max: { entregueEm: true },
+  });
+
+  const clientesInfo = rfmGroup.length > 0
+    ? await prisma.cliente.findMany({ where: { id: { in: rfmGroup.map((g) => g.clienteId) } }, select: { id: true, nome: true, telefone: true, email: true } })
+    : [];
+  const clientesMap = new Map(clientesInfo.map((c) => [c.id, c]));
+
+  const baseRfm = rfmGroup.map((g) => {
+    const ultimaCompra = g._max.entregueEm;
+    const recenciaDias = ultimaCompra ? Math.floor((agora.getTime() - ultimaCompra.getTime()) / 86400000) : 9999;
+    return {
+      clienteId: g.clienteId,
+      nome: clientesMap.get(g.clienteId)?.nome || 'Cliente',
+      telefone: clientesMap.get(g.clienteId)?.telefone || null,
+      email: clientesMap.get(g.clienteId)?.email || null,
+      recenciaDias,
+      frequencia: g._count._all,
+      monetario: Number(g._sum.total || 0),
+      ultimaCompraEm: ultimaCompra,
+    };
+  });
+
+  const classificados = calcularRfm(baseRfm);
+  const porSegmento = Object.keys(RFM_SEGMENT_LABELS).map((segmento) => ({
+    segmento,
+    label: RFM_SEGMENT_LABELS[segmento],
+    clientes: classificados.filter((c) => c.segmento === segmento).sort((a, b) => b.monetario - a.monetario),
+  }));
+
+  res.json({ segmentos: porSegmento, totalClientes: classificados.length });
 }));
 
 /**
