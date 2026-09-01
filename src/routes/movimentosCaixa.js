@@ -8,6 +8,7 @@ const router = Router({ mergeParams: true });
 const asyncHandler = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 const TIPOS_VALIDOS = ['ENTRADA', 'SAIDA', 'SANGRIA', 'SUPRIMENTO', 'FECHAMENTO'];
+const CATEGORIAS_VALIDAS = ['COMPRAS_ESTOQUE', 'TAXAS_TARIFAS', 'OUTROS'];
 
 router.use(loadEmpresa);
 
@@ -41,6 +42,7 @@ const requireLeituraCaixa = (req, res, next) => {
  *         descricao: { type: string, nullable: true }
  *         valor: { type: number }
  *         dataMovimento: { type: string, format: date }
+ *         categoria: { type: string, enum: [COMPRAS_ESTOQUE, TAXAS_TARIFAS, OUTROS], nullable: true }
  *     MovimentoCaixaInput:
  *       type: object
  *       required: [tipo, valor]
@@ -50,6 +52,7 @@ const requireLeituraCaixa = (req, res, next) => {
  *         valor: { type: number }
  *         motoboyId: { type: string, format: uuid }
  *         dataMovimento: { type: string, format: date }
+ *         categoria: { type: string, enum: [COMPRAS_ESTOQUE, TAXAS_TARIFAS, OUTROS] }
  */
 
 /**
@@ -166,13 +169,16 @@ router.get('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
  *         description: Dados inválidos
  */
 router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
-  const { tipo, descricao, valor, motoboyId, dataMovimento } = req.body;
+  const { tipo, descricao, valor, motoboyId, dataMovimento, categoria } = req.body;
 
   if (!tipo || !TIPOS_VALIDOS.includes(tipo)) {
     return res.status(400).json({ error: `Campo "tipo" é obrigatório e deve ser um de: ${TIPOS_VALIDOS.join(', ')}` });
   }
   if (valor === undefined || Number.isNaN(Number(valor)) || Number(valor) <= 0) {
     return res.status(400).json({ error: 'Campo "valor" é obrigatório e deve ser maior que zero' });
+  }
+  if (categoria && !CATEGORIAS_VALIDAS.includes(categoria)) {
+    return res.status(400).json({ error: `Campo "categoria" deve ser um de: ${CATEGORIAS_VALIDAS.join(', ')}` });
   }
 
   if (motoboyId) {
@@ -199,6 +205,7 @@ router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
       tipo,
       descricao: descricao || null,
       valor,
+      categoria: categoria || null,
       ...(dataMovimento ? { dataMovimento: new Date(dataMovimento) } : {}),
     },
   });

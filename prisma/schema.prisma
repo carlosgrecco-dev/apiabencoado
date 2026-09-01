@@ -163,6 +163,7 @@ model Empresa {
   movimentosCoins   CoinsMovimento[]
   operadoresPdv     OperadorPdv[]
   caixaSessoes      CaixaSessao[]
+  metas             Meta[]
 
   planoId String? @map("plano_id") @db.Uuid
   plano   Plano?  @relation(fields: [planoId], references: [id], onDelete: SetNull)
@@ -654,6 +655,7 @@ model Produto {
   variacoes   ProdutoVariacao[]
   gruposOpcao ProdutoGrupoOpcao[]
   favoritos   Favorito[]
+  metas       Meta[]
 
   @@map("produtos")
 }
@@ -1067,6 +1069,14 @@ enum TipoMovimentoCaixa {
   FECHAMENTO
 }
 
+/// Classificação opcional de uma SAIDA manual — pagamentos a motoboy (motoboyId) e SANGRIA já se
+/// distinguem sozinhos, isso aqui é só pro resto ("Outros" quando não informada).
+enum CategoriaMovimentoCaixa {
+  COMPRAS_ESTOQUE
+  TAXAS_TARIFAS
+  OUTROS
+}
+
 /// Tabela unificada de caixa: entradas, saídas e fechamentos de turno, tudo em um só lugar.
 model MovimentoCaixa {
   id            String              @id @default(uuid()) @db.Uuid
@@ -1091,6 +1101,11 @@ model MovimentoCaixa {
   /// resto na conferência de fechamento, principalmente quando a venda foi dividida (uma linha de
   /// MovimentoCaixa por PedidoPagamento).
   formaPagamento FormaPagamento? @map("forma_pagamento")
+
+  /// Classificação opcional de uma SAIDA manual (compras/estoque, taxas e tarifas) — usada no
+  /// gráfico "Saídas por categoria" do Resumo Financeiro. Pagamento a motoboy e sangria já têm
+  /// campo próprio (motoboyId / tipo=SANGRIA), então não precisam disso.
+  categoria CategoriaMovimentoCaixa?
 
   /// Quando este movimento é um pagamento de motoboy (tipo=SAIDA, motoboyId preenchido), lista os
   /// pedidos exatos que foram quitados nele — ver Pedido.pagamentoMotoboyId.
@@ -1166,4 +1181,30 @@ model HeroSlide {
   updatedAt   DateTime @updatedAt @map("updated_at")
 
   @@map("hero_slides")
+}
+
+enum TipoMeta {
+  FATURAMENTO
+  PEDIDOS
+  TICKET_MEDIO
+  /// Meta de quantidade vendida de um produto específico — só esse tipo usa produtoId.
+  PRODUTO
+}
+
+/// Meta diária ("Metas do dia" no Resumo Financeiro) — sempre relativa ao dia corrente, sem
+/// histórico por data (edita o valor-alvo, o progresso é recalculado a cada dia a partir dos
+/// pedidos ENTREGUE de hoje).
+model Meta {
+  id        String   @id @default(uuid()) @db.Uuid
+  empresaId String   @map("empresa_id") @db.Uuid
+  empresa   Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  tipo      TipoMeta
+  /// R$ para FATURAMENTO/TICKET_MEDIO; quantidade de pedidos para PEDIDOS; quantidade de unidades para PRODUTO.
+  valorAlvo Decimal  @map("valor_alvo") @db.Decimal(10, 2)
+  produtoId String?  @map("produto_id") @db.Uuid
+  produto   Produto? @relation(fields: [produtoId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("metas")
 }
