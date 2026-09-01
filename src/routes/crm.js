@@ -295,6 +295,86 @@ const csvField = (value) => {
 
 /**
  * @openapi
+ * /empresas/{empresaId}/crm/indicadores:
+ *   get:
+ *     summary: Indicadores operacionais (ticket médio, cancelamentos%, tempo médio de entrega, entregas no prazo%) dia a dia no período, mais taxa de recompra do período inteiro — visão de tendência, complementar aos totais já existentes em /crm/resumo e /dashboard/resumo
+ *     tags: [CRM]
+ *     parameters:
+ *       - in: path
+ *         name: empresaId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *       - in: query
+ *         name: de
+ *         schema: { type: string, format: date }
+ *       - in: query
+ *         name: ate
+ *         schema: { type: string, format: date }
+ *     responses:
+ *       200:
+ *         description: Série diária dos indicadores + taxa de recompra do período
+ */
+router.get('/indicadores', asyncHandler(async (req, res) => {
+  const { de, ate } = req.query;
+  const empresaId = req.params.empresaId;
+  const range = { gte: dataInicio(de), lte: dataFim(ate) };
+  const prazoMaxMin = req.empresa.tempoEstimadoMax;
+
+  const pedidos = await prisma.pedido.findMany({
+    where: { empresaId, createdAt: range },
+    select: { createdAt: true, status: true, tipoPedido: true, entregueEm: true, total: true, clienteId: true },
+  });
+
+  const porDiaMap = new Map();
+  for (const p of pedidos) {
+    const dia = p.createdAt.toISOString().slice(0, 10);
+    if (!porDiaMap.get(dia)) {
+      porDiaMap.set(dia, { date: dia, total: 0, cancelados: 0, entregues: 0, faturamento: 0, temposEntregaDelivery: [] });
+    }
+    const acc = porDiaMap.get(dia);
+    acc.total += 1;
+    if (p.status === 'CANCELADO') acc.cancelados += 1;
+    if (p.status === 'ENTREGUE') {
+      acc.entregues += 1;
+      acc.faturamento += Number(p.total);
+      if (p.tipoPedido === 'DELIVERY' && p.entregueEm) {
+        acc.temposEntregaDelivery.push((p.entregueEm.getTime() - p.createdAt.getTime()) / 60000);
+      }
+    }
+  }
+
+  const serie = Array.from(porDiaMap.values())
+    .map((d) => ({
+      date: d.date,
+      ticketMedio: d.entregues > 0 ? d.faturamento / d.entregues : 0,
+      cancelamentosPercent: d.total > 0 ? (d.cancelados / d.total) * 100 : 0,
+      tempoMedioEntregaMin: d.temposEntregaDelivery.length > 0
+        ? d.temposEntregaDelivery.reduce((s, t) => s + t, 0) / d.temposEntregaDelivery.length
+        : null,
+      entregasNoPrazoPercent: prazoMaxMin && d.temposEntregaDelivery.length > 0
+        ? (d.temposEntregaDelivery.filter((t) => t <= prazoMaxMin).length / d.temposEntregaDelivery.length) * 100
+        : null,
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  // Taxa de recompra é medida sobre o período inteiro (não faz sentido "por dia") — mesmo cálculo do dashboard.
+  const clienteIdsPeriodo = [...new Set(pedidos.filter((p) => p.status === 'ENTREGUE' && p.clienteId).map((p) => p.clienteId))];
+  let taxaRecompraPercent = 0;
+  if (clienteIdsPeriodo.length > 0) {
+    const totalPorCliente = await prisma.pedido.groupBy({
+      by: ['clienteId'],
+      where: { empresaId, status: 'ENTREGUE', clienteId: { in: clienteIdsPeriodo } },
+      _count: { _all: true },
+    });
+    const recompradores = totalPorCliente.filter((c) => c._count._all > 1).length;
+    taxaRecompraPercent = (recompradores / clienteIdsPeriodo.length) * 100;
+  }
+
+  res.json({ serie, taxaRecompraPercent });
+}));
+
+/**
+ * @openapi
  * /empresas/{empresaId}/crm/exportar-csv:
  *   get:
  *     summary: Exporta os pedidos entregues do período em CSV, pronto pra abrir em Excel/Planilhas
