@@ -11,6 +11,7 @@ const asyncHandler = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 router.use(loadEmpresa);
 
 const TIPOS_VALIDOS = ['PERCENTUAL', 'VALOR_FIXO', 'FRETE_GRATIS'];
+const FORMAS_PAGAMENTO_VALIDAS = ['PIX', 'DINHEIRO', 'CARTAO'];
 
 const handlePrismaError = (error, res) => {
   if (error.code === 'P2025') {
@@ -31,6 +32,17 @@ const validarPayload = ({ codigo, tipo, valor }) => {
   }
   if (tipo === 'PERCENTUAL' && Number(valor) > 100) {
     erros.push('O percentual do cupom não pode passar de 100');
+  }
+  return erros;
+};
+
+const validarRestricoes = ({ formaPagamentoRestrita, diaSemanaRestrito }) => {
+  const erros = [];
+  if (formaPagamentoRestrita !== undefined && formaPagamentoRestrita !== null && !FORMAS_PAGAMENTO_VALIDAS.includes(formaPagamentoRestrita)) {
+    erros.push(`Campo "formaPagamentoRestrita" deve ser um de: ${FORMAS_PAGAMENTO_VALIDAS.join(', ')}`);
+  }
+  if (diaSemanaRestrito !== undefined && diaSemanaRestrito !== null && (Number(diaSemanaRestrito) < 0 || Number(diaSemanaRestrito) > 6)) {
+    erros.push('Campo "diaSemanaRestrito" deve ser um número de 0 (domingo) a 6 (sábado)');
   }
   return erros;
 };
@@ -131,9 +143,12 @@ router.get('/', asyncHandler(async (req, res) => {
  *         description: Código já cadastrado
  */
 router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
-  const { codigo, descricao, tipo, valor, apenasPrimeiraCompra, valorMinimoPedido, usoMaximo, validoAte, ativo, clienteAlvoId } = req.body;
+  const {
+    codigo, descricao, tipo, valor, apenasPrimeiraCompra, valorMinimoPedido, usoMaximo, validoDe, validoAte, ativo, clienteAlvoId,
+    bairrosRestritos, formaPagamentoRestrita, diaSemanaRestrito, apenasClientesFieis,
+  } = req.body;
 
-  const erros = validarPayload(req.body);
+  const erros = [...validarPayload(req.body), ...validarRestricoes(req.body)];
   if (erros.length) {
     return res.status(400).json({ error: erros.join('; ') });
   }
@@ -156,8 +171,13 @@ router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
         apenasPrimeiraCompra: Boolean(apenasPrimeiraCompra),
         valorMinimoPedido: valorMinimoPedido || null,
         usoMaximo: usoMaximo || null,
+        validoDe: validoDe ? new Date(validoDe) : null,
         validoAte: validoAte ? new Date(validoAte) : null,
         clienteAlvoId: clienteAlvoId || null,
+        bairrosRestritos: Array.isArray(bairrosRestritos) ? bairrosRestritos : [],
+        formaPagamentoRestrita: formaPagamentoRestrita || null,
+        diaSemanaRestrito: diaSemanaRestrito === '' || diaSemanaRestrito == null ? null : Number(diaSemanaRestrito),
+        apenasClientesFieis: Boolean(apenasClientesFieis),
         ...(ativo !== undefined ? { ativo } : {}),
       },
     });
@@ -195,9 +215,12 @@ router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
  *         description: Cupom não encontrado
  */
 router.put('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
-  const { codigo, descricao, tipo, valor, apenasPrimeiraCompra, valorMinimoPedido, usoMaximo, validoAte, ativo, clienteAlvoId } = req.body;
+  const {
+    codigo, descricao, tipo, valor, apenasPrimeiraCompra, valorMinimoPedido, usoMaximo, validoDe, validoAte, ativo, clienteAlvoId,
+    bairrosRestritos, formaPagamentoRestrita, diaSemanaRestrito, apenasClientesFieis,
+  } = req.body;
 
-  const erros = validarPayload(req.body);
+  const erros = [...validarPayload(req.body), ...validarRestricoes(req.body)];
   if (erros.length) {
     return res.status(400).json({ error: erros.join('; ') });
   }
@@ -225,8 +248,13 @@ router.put('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
         apenasPrimeiraCompra: Boolean(apenasPrimeiraCompra),
         valorMinimoPedido: valorMinimoPedido || null,
         usoMaximo: usoMaximo || null,
+        validoDe: validoDe ? new Date(validoDe) : null,
         validoAte: validoAte ? new Date(validoAte) : null,
         clienteAlvoId: clienteAlvoId || null,
+        bairrosRestritos: Array.isArray(bairrosRestritos) ? bairrosRestritos : [],
+        formaPagamentoRestrita: formaPagamentoRestrita || null,
+        diaSemanaRestrito: diaSemanaRestrito === '' || diaSemanaRestrito == null ? null : Number(diaSemanaRestrito),
+        apenasClientesFieis: Boolean(apenasClientesFieis),
         ...(ativo !== undefined ? { ativo } : {}),
       },
     });
@@ -338,7 +366,7 @@ router.delete('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
  *         description: Cupom inválido para este pedido
  */
 router.post('/validar', asyncHandler(async (req, res) => {
-  const { codigo, subtotal } = req.body;
+  const { codigo, subtotal, bairro, formaPagamento } = req.body;
 
   if (subtotal === undefined || Number.isNaN(Number(subtotal))) {
     return res.status(400).json({ error: 'Campo "subtotal" é obrigatório' });
@@ -350,7 +378,7 @@ router.post('/validar', asyncHandler(async (req, res) => {
     ? req.auth.clienteId
     : null;
 
-  const resultado = await validarCupom(prisma, req.params.empresaId, codigo, clienteId, Number(subtotal));
+  const resultado = await validarCupom(prisma, req.params.empresaId, codigo, clienteId, Number(subtotal), { bairro, formaPagamento });
 
   if (!resultado.ok) {
     return res.status(400).json({ error: resultado.error });
@@ -362,6 +390,92 @@ router.post('/validar', asyncHandler(async (req, res) => {
     descricao: resultado.cupom.descricao,
     desconto: resultado.desconto,
     freteGratis: resultado.freteGratis,
+  });
+}));
+
+/**
+ * @openapi
+ * /empresas/{empresaId}/cupons/admin-resumo:
+ *   get:
+ *     summary: Lista de cupons com status calculado (ativo/agendado/expirado) + estatísticas de uso do mês, pra tela de gestão do admin
+ *     tags: [Cupons]
+ *     parameters:
+ *       - in: path
+ *         name: empresaId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Cupons + estatísticas agregadas
+ */
+router.get('/admin-resumo', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+  const cupons = await prisma.cupom.findMany({ where: { empresaId: req.params.empresaId }, orderBy: { createdAt: 'desc' } });
+
+  const agora = new Date();
+  const statusDe = (cupom) => {
+    if (!cupom.ativo) return 'INATIVO';
+    if (cupom.validoDe && new Date(cupom.validoDe) > agora) return 'AGENDADO';
+    if (cupom.validoAte && new Date(cupom.validoAte) < agora) return 'EXPIRADO';
+    if (cupom.usoMaximo != null && cupom.usosRealizados >= cupom.usoMaximo) return 'ESGOTADO';
+    return 'ATIVO';
+  };
+  const cuponsComStatus = cupons.map((c) => ({ ...c, statusCalculado: statusDe(c) }));
+
+  const inicioMesAtual = new Date(agora.getFullYear(), agora.getMonth(), 1);
+  const inicioMesAnterior = new Date(agora.getFullYear(), agora.getMonth() - 1, 1);
+
+  // Pedido.cupomCodigo/descontoCupom já guardam o histórico de uso por pedido — não precisa de
+  // uma tabela nova só pra saber "quantos usos e quanto desconto este mês".
+  const [pedidosMesAtual, pedidosMesAnterior] = await Promise.all([
+    prisma.pedido.findMany({
+      where: { empresaId: req.params.empresaId, cupomCodigo: { not: null }, status: { not: 'CANCELADO' }, createdAt: { gte: inicioMesAtual } },
+      select: { total: true, descontoCupom: true, cupomCodigo: true },
+    }),
+    prisma.pedido.findMany({
+      where: {
+        empresaId: req.params.empresaId, cupomCodigo: { not: null }, status: { not: 'CANCELADO' },
+        createdAt: { gte: inicioMesAnterior, lt: inicioMesAtual },
+      },
+      select: { total: true, descontoCupom: true },
+    }),
+  ]);
+
+  const somar = (lista, campo) => lista.reduce((s, p) => s + Number(p[campo] || 0), 0);
+  const usosMesAtual = pedidosMesAtual.length;
+  const usosMesAnterior = pedidosMesAnterior.length;
+  const descontoMesAtual = somar(pedidosMesAtual, 'descontoCupom');
+  const descontoMesAnterior = somar(pedidosMesAnterior, 'descontoCupom');
+
+  const topCuponsMap = new Map();
+  for (const c of cupons) {
+    if (c.usosRealizados > 0) topCuponsMap.set(c.codigo, c.usosRealizados);
+  }
+  const topCupons = Array.from(topCuponsMap.entries())
+    .map(([codigo, usos]) => ({ codigo, usos }))
+    .sort((a, b) => b.usos - a.usos)
+    .slice(0, 5);
+
+  const porTipoMap = new Map();
+  for (const c of cupons) {
+    porTipoMap.set(c.tipo, (porTipoMap.get(c.tipo) || 0) + 1);
+  }
+
+  res.json({
+    cupons: cuponsComStatus,
+    stats: {
+      total: cupons.length,
+      ativos: cuponsComStatus.filter((c) => c.statusCalculado === 'ATIVO').length,
+      agendados: cuponsComStatus.filter((c) => c.statusCalculado === 'AGENDADO').length,
+      expirados: cuponsComStatus.filter((c) => c.statusCalculado === 'EXPIRADO' || c.statusCalculado === 'ESGOTADO').length,
+      usosMesAtual,
+      usosMesAnterior,
+      descontoMesAtual,
+      descontoMesAnterior,
+      ticketMedioComCupom: pedidosMesAtual.length ? somar(pedidosMesAtual, 'total') / pedidosMesAtual.length : 0,
+      economiaMediaPorPedido: pedidosMesAtual.length ? descontoMesAtual / pedidosMesAtual.length : 0,
+      topCupons,
+      porTipo: Array.from(porTipoMap.entries()).map(([tipo, quantidade]) => ({ tipo, quantidade })),
+    },
   });
 }));
 

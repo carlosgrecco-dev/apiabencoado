@@ -554,6 +554,8 @@ model Cupom {
   valorMinimoPedido    Decimal?  @map("valor_minimo_pedido") @db.Decimal(10, 2)
   usoMaximo            Int?      @map("uso_maximo") // null = ilimitado
   usosRealizados       Int       @default(0) @map("usos_realizados")
+  /// Início de vigência — null = vale desde a criação. Cupom com validoDe no futuro aparece como "Agendado" no admin.
+  validoDe             DateTime? @map("valido_de")
   validoAte            DateTime? @map("valido_ate")
   ativo                Boolean   @default(true)
   createdAt            DateTime  @default(now()) @map("created_at")
@@ -562,6 +564,15 @@ model Cupom {
   /// Quando preenchido, o cupom é privado — só esse cliente pode aplicá-lo (ex: campanha "sentimos sua falta"). Null = cupom público, qualquer cliente da loja pode usar.
   clienteAlvoId        String?   @map("cliente_alvo_id") @db.Uuid
   clienteAlvo          Cliente?  @relation(fields: [clienteAlvoId], references: [id], onDelete: Cascade)
+
+  /// Vazio = vale em qualquer bairro. Texto livre pra bater com Pedido.bairro (mesmo padrão de ZonaEntrega).
+  bairrosRestritos       String[]        @default([]) @map("bairros_restritos")
+  /// Null = qualquer forma de pagamento.
+  formaPagamentoRestrita FormaPagamento? @map("forma_pagamento_restrita")
+  /// 0=domingo..6=sábado. Null = todos os dias.
+  diaSemanaRestrito      Int?            @map("dia_semana_restrito")
+  /// Só clientes tier PRATA/OURO (totalUnidadesCompradas >= 20 — mesmo corte de front/src/types/Cliente.ts:loyaltyTier).
+  apenasClientesFieis    Boolean         @default(false) @map("apenas_clientes_fieis")
 
   pedidos Pedido[]
 

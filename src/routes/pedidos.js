@@ -472,7 +472,7 @@ router.post('/', asyncHandler(async (req, res) => {
   let cupomAplicado = null;
 
   if (cupomCodigo) {
-    const resultado = await validarCupom(prisma, req.params.empresaId, cupomCodigo, cliente?.id || null, subtotal);
+    const resultado = await validarCupom(prisma, req.params.empresaId, cupomCodigo, cliente?.id || null, subtotal, { bairro, formaPagamento });
     if (!resultado.ok) {
       return res.status(400).json({ error: resultado.error });
     }
