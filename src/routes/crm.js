@@ -40,7 +40,7 @@ router.get('/resumo', asyncHandler(async (req, res) => {
 
   const entregues = await prisma.pedido.findMany({
     where: { empresaId: req.params.empresaId, status: 'ENTREGUE', createdAt: range },
-    include: { itens: true },
+    include: { itens: true, cliente: { select: { nome: true } } },
   });
 
   const totalRevenue = entregues.reduce((sum, p) => sum + Number(p.total), 0);
@@ -81,11 +81,11 @@ router.get('/resumo', asyncHandler(async (req, res) => {
   const dailyMap = new Map();
   for (const p of entregues) {
     const dia = p.createdAt.toISOString().slice(0, 10);
-    dailyMap.set(dia, (dailyMap.get(dia) || 0) + Number(p.total));
+    const atual = dailyMap.get(dia) || { total: 0, pedidos: 0 };
+    atual.total += Number(p.total);
+    atual.pedidos += 1;
+    dailyMap.set(dia, atual);
   }
-  const daily = Array.from(dailyMap.entries())
-    .map(([date, total]) => ({ date, total }))
-    .sort((a, b) => a.date.localeCompare(b.date));
 
   const comMotoboy = await prisma.pedido.findMany({
     where: {
@@ -118,6 +118,7 @@ router.get('/resumo', asyncHandler(async (req, res) => {
 
   const comissaoPercent = Number(req.empresa.comissaoPercent);
   const comissaoValor = totalRevenue * (comissaoPercent / 100);
+  const descontosTotais = entregues.reduce((sum, p) => sum + Number(p.descontoCupom || 0), 0);
 
   // Produtos mais vendidos — agrega os itens dos mesmos pedidos ENTREGUES já carregados acima.
   const produtoMap = new Map();
@@ -144,6 +145,25 @@ router.get('/resumo', asyncHandler(async (req, res) => {
     const classe = percentualAcumulado <= 80 ? 'A' : percentualAcumulado <= 95 ? 'B' : 'C';
     return { ...item, percentualAcumulado, classe };
   });
+
+  // Top clientes por gasto e distribuição de clientes por frequência de compra no período —
+  // mesma base "entregues" já carregada acima, sem query extra.
+  const clienteMap = new Map();
+  for (const p of entregues) {
+    if (!p.clienteId) continue;
+    const atual = clienteMap.get(p.clienteId) || { clienteId: p.clienteId, nome: p.cliente?.nome || p.clienteNome || '—', pedidos: 0, gasto: 0 };
+    atual.pedidos += 1;
+    atual.gasto += Number(p.total);
+    clienteMap.set(p.clienteId, atual);
+  }
+  const topClientesPorGasto = Array.from(clienteMap.values()).sort((a, b) => b.gasto - a.gasto).slice(0, 5);
+  const clientesPorFrequencia = { umPedido: 0, doisACinco: 0, seisADez: 0, onzeOuMais: 0 };
+  for (const c of clienteMap.values()) {
+    if (c.pedidos === 1) clientesPorFrequencia.umPedido += 1;
+    else if (c.pedidos <= 5) clientesPorFrequencia.doisACinco += 1;
+    else if (c.pedidos <= 10) clientesPorFrequencia.seisADez += 1;
+    else clientesPorFrequencia.onzeOuMais += 1;
+  }
 
   // Horários de pico — conta os pedidos entregues por hora do dia (0-23), pra ajudar a escalar equipe.
   const porHoraMap = new Map();
@@ -184,13 +204,14 @@ router.get('/resumo', asyncHandler(async (req, res) => {
   const clienteIds = [...new Set(entregues.map((p) => p.clienteId).filter(Boolean))];
   let novos = 0;
   let recorrentes = 0;
+  const primeiraCompraPorCliente = new Map();
   if (clienteIds.length > 0) {
     const primeirasCompras = await prisma.pedido.groupBy({
       by: ['clienteId'],
       where: { empresaId: req.params.empresaId, status: 'ENTREGUE', clienteId: { in: clienteIds } },
       _min: { createdAt: true },
     });
-    const primeiraCompraPorCliente = new Map(primeirasCompras.map((c) => [c.clienteId, c._min.createdAt]));
+    for (const c of primeirasCompras) primeiraCompraPorCliente.set(c.clienteId, c._min.createdAt);
     for (const clienteId of clienteIds) {
       const primeira = primeiraCompraPorCliente.get(clienteId);
       const ehNovo = primeira && primeira >= range.gte && (!range.lte || primeira <= range.lte);
@@ -199,6 +220,31 @@ router.get('/resumo', asyncHandler(async (req, res) => {
     }
   }
   const novosVsRecorrentes = { novos, recorrentes };
+
+  // Clientes novos por dia — mesma definição acima (1ª compra ENTREGUE de vida caiu neste dia),
+  // reaproveitando primeiraCompraPorCliente já calculado.
+  const novosPorDiaMap = new Map();
+  if (clienteIds.length > 0) {
+    const jaContados = new Set();
+    for (const p of entregues) {
+      if (!p.clienteId || jaContados.has(p.clienteId)) continue;
+      const primeira = primeiraCompraPorCliente.get(p.clienteId);
+      const dia = p.createdAt.toISOString().slice(0, 10);
+      if (primeira && primeira.toISOString().slice(0, 10) === dia) {
+        novosPorDiaMap.set(dia, (novosPorDiaMap.get(dia) || 0) + 1);
+        jaContados.add(p.clienteId);
+      }
+    }
+  }
+  const daily = Array.from(dailyMap.entries())
+    .map(([date, v]) => ({
+      date,
+      total: v.total,
+      pedidos: v.pedidos,
+      ticketMedio: v.pedidos > 0 ? v.total / v.pedidos : 0,
+      clientesNovos: novosPorDiaMap.get(date) || 0,
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date));
 
   // Cupons usados no período — quantas vezes cada código foi aplicado e o desconto total gerado.
   const cupomMap = new Map();
@@ -224,6 +270,7 @@ router.get('/resumo', asyncHandler(async (req, res) => {
     motoboyClosing: Array.from(motoboyMap.values()),
     comissaoPercent,
     comissaoValor,
+    descontosTotais,
     mostrarComissao: !req.empresa.ocultarComissaoTenant,
     topProdutos,
     curvaAbc,
@@ -234,6 +281,8 @@ router.get('/resumo', asyncHandler(async (req, res) => {
     novosVsRecorrentes,
     cuponsUsados,
     avaliacaoDetalhada,
+    topClientesPorGasto,
+    clientesPorFrequencia,
   });
 }));
 
