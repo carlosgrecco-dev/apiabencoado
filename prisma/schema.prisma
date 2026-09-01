@@ -712,6 +712,18 @@ model Motoboy {
   /// Toggle manual que o próprio motoboy liga/desliga no portal dele, pra sinalizar ao admin se está livre pra nova corrida. Escopo só desta loja — não é um pool de motoboys da plataforma.
   disponivel Boolean @default(true)
 
+  /// Veículo e turno — cadastrais, opcionais, só pra exibição no admin.
+  veiculoTipo  String? @map("veiculo_tipo") // ex: "Honda CG 160"
+  veiculoPlaca String? @map("veiculo_placa")
+  turno        String? // ex: "Manhã", "Tarde", "Noite" — texto livre, sem enum fixo
+
+  /// Documentos obrigatórios — URLs de upload (mesma rota /uploads já usada em fotos de produto/avaliação). Null = não enviado ainda.
+  fotoPerfilUrl            String? @map("foto_perfil_url")
+  cnhUrl                   String? @map("cnh_url")
+  documentoVeiculoUrl      String? @map("documento_veiculo_url")
+  seguroUrl                String? @map("seguro_url")
+  comprovanteResidenciaUrl String? @map("comprovante_residencia_url")
+
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("updated_at")
 
@@ -801,6 +813,10 @@ model Pedido {
   motoboy            Motoboy? @relation(fields: [motoboyId], references: [id], onDelete: SetNull)
   taxaEntregaMotoboy Decimal? @map("taxa_entrega_motoboy") @db.Decimal(10, 2)
   motoboyPago        Boolean  @default(false) @map("motoboy_pago")
+  /// Aponta pro MovimentoCaixa (SAIDA) que pagou este pedido ao motoboy — permite reconstruir
+  /// período/entregas/valores exatos de um pagamento passado, em vez de só saber o total pago.
+  pagamentoMotoboyId String?         @map("pagamento_motoboy_id") @db.Uuid
+  pagamentoMotoboy   MovimentoCaixa? @relation("PagamentoMotoboyPedidos", fields: [pagamentoMotoboyId], references: [id], onDelete: SetNull)
   /// Foto anexada pelo motoboy como comprovante ao confirmar a entrega (ENTREGUE).
   fotoEntrega        String?  @map("foto_entrega")
 
@@ -1039,6 +1055,10 @@ model MovimentoCaixa {
   /// resto na conferência de fechamento, principalmente quando a venda foi dividida (uma linha de
   /// MovimentoCaixa por PedidoPagamento).
   formaPagamento FormaPagamento? @map("forma_pagamento")
+
+  /// Quando este movimento é um pagamento de motoboy (tipo=SAIDA, motoboyId preenchido), lista os
+  /// pedidos exatos que foram quitados nele — ver Pedido.pagamentoMotoboyId.
+  pedidosPagos Pedido[] @relation("PagamentoMotoboyPedidos")
 
   @@map("movimentos_caixa")
 }

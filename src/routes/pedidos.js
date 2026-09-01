@@ -1178,7 +1178,7 @@ router.post('/pagar-motoboy', requireEmpresaAdmin(), asyncHandler(async (req, re
 
     await tx.pedido.updateMany({
       where: { id: { in: pendentes.map((p) => p.id) } },
-      data: { motoboyPago: true },
+      data: { motoboyPago: true, pagamentoMotoboyId: movimento.id },
     });
 
     return { movimento, corridas: pendentes.length, total };
