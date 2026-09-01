@@ -591,6 +591,8 @@ model Produto {
   empresaId        String     @map("empresa_id") @db.Uuid
   empresa          Empresa    @relation(fields: [empresaId], references: [id], onDelete: Cascade)
   nome             String
+  /// Código/SKU livre pro lojista organizar o catálogo (ex: "AC001") — opcional, sem checagem de unicidade.
+  codigo           String?
   descricao        String?
   categoriaId      String?    @map("categoria_id") @db.Uuid
   categoria        Categoria? @relation(fields: [categoriaId], references: [id], onDelete: SetNull)

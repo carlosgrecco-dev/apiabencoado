@@ -138,6 +138,55 @@ router.get('/', asyncHandler(async (req, res) => {
 
 /**
  * @openapi
+ * /empresas/{empresaId}/produtos/admin-resumo:
+ *   get:
+ *     summary: Lista de produtos com vendas totais (lifetime) por produto + estatísticas do catálogo, pra tela de gestão do admin
+ *     tags: [Produtos]
+ *     parameters:
+ *       - in: path
+ *         name: empresaId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Produtos com vendasTotais + estatísticas agregadas
+ */
+router.get('/admin-resumo', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+  const produtos = await prisma.produto.findMany({
+    where: { empresaId: req.params.empresaId },
+    include: { categoria: true },
+    orderBy: [{ ordem: 'asc' }, { nome: 'asc' }],
+  });
+
+  const vendasRaw = await prisma.pedidoItem.groupBy({
+    by: ['produtoId'],
+    where: { produtoId: { not: null }, pedido: { empresaId: req.params.empresaId, status: 'ENTREGUE' } },
+    _sum: { quantidade: true },
+  });
+  const vendasMap = new Map(vendasRaw.map((v) => [v.produtoId, v._sum.quantidade || 0]));
+
+  const produtosComVendas = produtos.map((p) => ({ ...comDisponibilidade(p), vendasTotais: vendasMap.get(p.id) || 0 }));
+
+  const ativos = produtos.filter((p) => p.ativo).length;
+  const estoqueBaixo = produtos.filter(
+    (p) => p.controlarEstoque && p.estoqueMinimo != null && (p.estoqueQtd ?? 0) <= p.estoqueMinimo
+  ).length;
+  const maisVendido = produtosComVendas.reduce((max, p) => (p.vendasTotais > (max?.vendasTotais ?? -1) ? p : max), null);
+
+  res.json({
+    produtos: produtosComVendas,
+    stats: {
+      total: produtos.length,
+      ativos,
+      inativos: produtos.length - ativos,
+      estoqueBaixo,
+      maisVendido: maisVendido && maisVendido.vendasTotais > 0 ? { id: maisVendido.id, nome: maisVendido.nome } : null,
+    },
+  });
+}));
+
+/**
+ * @openapi
  * /empresas/{empresaId}/produtos/{id}:
  *   get:
  *     summary: Busca um produto pelo id
@@ -157,6 +206,43 @@ router.get('/', asyncHandler(async (req, res) => {
  *       404:
  *         description: Produto não encontrado
  */
+
+/**
+ * @openapi
+ * /empresas/{empresaId}/produtos/opcoes-grupos-todos:
+ *   get:
+ *     summary: Lista todos os grupos de opção de todos os produtos da empresa, com o nome do produto dono — pra tela "Opções e Grupos"/"Adicionais"
+ *     tags: [Produtos]
+ *     parameters:
+ *       - in: path
+ *         name: empresaId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Grupos de opção de todos os produtos
+ */
+router.get('/opcoes-grupos-todos', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+  const produtos = await prisma.produto.findMany({
+    where: { empresaId: req.params.empresaId },
+    select: {
+      id: true,
+      nome: true,
+      gruposOpcao: {
+        orderBy: [{ ordem: 'asc' }, { createdAt: 'asc' }],
+        include: { opcoes: { orderBy: [{ ordem: 'asc' }, { nome: 'asc' }] } },
+      },
+    },
+    orderBy: { nome: 'asc' },
+  });
+
+  const grupos = produtos.flatMap((p) =>
+    p.gruposOpcao.map((g) => ({ ...g, produtoId: p.id, produtoNome: p.nome }))
+  );
+
+  res.json(grupos);
+}));
+
 router.get('/:id', asyncHandler(async (req, res) => {
   const produto = await prisma.produto.findFirst({
     where: { id: req.params.id, empresaId: req.params.empresaId },
@@ -195,8 +281,8 @@ router.get('/:id', asyncHandler(async (req, res) => {
  */
 router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
   const {
-    nome, descricao, categoriaId, preco, precoPromocional, fotoUrl, ativo, ordem,
-    controlarEstoque, estoqueQtd, ehCombo,
+    nome, codigo, descricao, categoriaId, preco, precoPromocional, fotoUrl, ativo, ordem,
+    controlarEstoque, estoqueQtd, estoqueMinimo, ehCombo,
   } = req.body;
 
   const erros = validarPayload(req.body);
@@ -212,6 +298,7 @@ router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
     data: {
       empresaId: req.params.empresaId,
       nome,
+      codigo: codigo || null,
       descricao: descricao || null,
       categoriaId: categoriaId || null,
       preco,
@@ -221,6 +308,7 @@ router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
       ...(ordem !== undefined ? { ordem } : {}),
       ...(controlarEstoque !== undefined ? { controlarEstoque } : {}),
       ...(estoqueQtd !== undefined ? { estoqueQtd: estoqueQtd === null || estoqueQtd === '' ? null : Number(estoqueQtd) } : {}),
+      ...(estoqueMinimo !== undefined ? { estoqueMinimo: estoqueMinimo === null || estoqueMinimo === '' ? null : Number(estoqueMinimo) } : {}),
       ...(ehCombo !== undefined ? { ehCombo } : {}),
     },
     include: { categoria: true },
@@ -258,8 +346,8 @@ router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
  */
 router.put('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
   const {
-    nome, descricao, categoriaId, preco, precoPromocional, fotoUrl, ativo, ordem,
-    controlarEstoque, estoqueQtd, ehCombo,
+    nome, codigo, descricao, categoriaId, preco, precoPromocional, fotoUrl, ativo, ordem,
+    controlarEstoque, estoqueQtd, estoqueMinimo, ehCombo,
   } = req.body;
 
   const erros = validarPayload(req.body);
@@ -283,6 +371,7 @@ router.put('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
       where: { id: req.params.id },
       data: {
         nome,
+        codigo: codigo || null,
         descricao: descricao || null,
         categoriaId: categoriaId || null,
         preco,
@@ -292,6 +381,7 @@ router.put('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
         ...(ordem !== undefined ? { ordem } : {}),
         ...(controlarEstoque !== undefined ? { controlarEstoque } : {}),
         ...(estoqueQtd !== undefined ? { estoqueQtd: estoqueQtd === null || estoqueQtd === '' ? null : Number(estoqueQtd) } : {}),
+        ...(estoqueMinimo !== undefined ? { estoqueMinimo: estoqueMinimo === null || estoqueMinimo === '' ? null : Number(estoqueMinimo) } : {}),
         ...(ehCombo !== undefined ? { ehCombo } : {}),
       },
       include: { categoria: true },
