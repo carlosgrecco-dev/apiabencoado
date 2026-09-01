@@ -382,6 +382,15 @@ router.post('/', asyncHandler(async (req, res) => {
   }
   if (!formaPagamento || !FORMAS_PAGAMENTO_VALIDAS.includes(formaPagamento)) {
     erros.push(`Campo "formaPagamento" é obrigatório e deve ser um de: ${FORMAS_PAGAMENTO_VALIDAS.join(', ')}`);
+  } else if (!souEmpresaAdmin) {
+    // O PDV (EMPRESA_ADMIN) sempre pode usar qualquer forma — a restrição é só pro checkout
+    // público, respeitando o que o lojista desativou em Vendas → Formas de Pagamento.
+    const formaAceita = {
+      PIX: req.empresa.aceitaPix, DINHEIRO: req.empresa.aceitaDinheiro, CARTAO: req.empresa.aceitaCartao,
+    }[formaPagamento];
+    if (formaAceita === false) {
+      erros.push('Esta forma de pagamento não está disponível nesta loja no momento');
+    }
   }
   if (!Array.isArray(itens) || itens.length === 0) {
     erros.push('O pedido precisa de ao menos um item');

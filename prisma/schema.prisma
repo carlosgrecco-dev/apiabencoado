@@ -133,6 +133,11 @@ model Empresa {
   /// Unidades de fidelidade por indicação concluída — só usado quando habilitarIndicacaoAvancada=true (senão usa o padrão fixo de 3).
   indicacaoRecompensaUnidades Int @default(3) @map("indicacao_recompensa_unidades")
 
+  // Formas de pagamento aceitas no checkout do storefront — o lojista escolhe quais oferece.
+  aceitaPix      Boolean @default(true) @map("aceita_pix")
+  aceitaDinheiro Boolean @default(true) @map("aceita_dinheiro")
+  aceitaCartao   Boolean @default(true) @map("aceita_cartao")
+
   // Configurações operacionais
   lojaAbertaManual      Boolean @default(true) @map("loja_aberta_manual") // botão de emergência "Loja Aberta/Fechada"
   usarHorarioAutomatico Boolean @default(false) @map("usar_horario_automatico") // se true, cruza com HorarioFuncionamento

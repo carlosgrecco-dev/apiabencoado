@@ -535,6 +535,9 @@ router.get('/slug/:slug', asyncHandler(async (req, res) => {
       pdvMesaAbertaContinua: true,
       pdvPermiteSplitPagamento: true,
       indicacaoRecompensaUnidades: true,
+      aceitaPix: true,
+      aceitaDinheiro: true,
+      aceitaCartao: true,
       lojaAbertaManual: true,
       usarHorarioAutomatico: true,
       tempoEstimadoMin: true,
@@ -1432,6 +1435,65 @@ router.put('/:id/pdv-config', requireEmpresaAdmin('id'), asyncHandler(async (req
         ...(pdvPermiteSplitPagamento !== undefined ? { pdvPermiteSplitPagamento } : {}),
       },
     });
+    res.json(serializeEmpresa(empresa));
+  } catch (error) {
+    return handlePrismaError(error, res);
+  }
+}));
+
+/**
+ * @openapi
+ * /empresas/{id}/formas-pagamento:
+ *   put:
+ *     summary: O próprio lojista escolhe quais formas de pagamento aceita no checkout do storefront (Pix, dinheiro, cartão na entrega)
+ *     tags: [Empresas]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               aceitaPix: { type: boolean }
+ *               aceitaDinheiro: { type: boolean }
+ *               aceitaCartao: { type: boolean }
+ *     responses:
+ *       200:
+ *         description: Configuração atualizada
+ *       400:
+ *         description: Dados inválidos
+ *       404:
+ *         description: Empresa não encontrada
+ */
+router.put('/:id/formas-pagamento', requireEmpresaAdmin('id'), asyncHandler(async (req, res) => {
+  const { aceitaPix, aceitaDinheiro, aceitaCartao } = req.body;
+
+  for (const [campo, valor] of Object.entries({ aceitaPix, aceitaDinheiro, aceitaCartao })) {
+    if (valor !== undefined && typeof valor !== 'boolean') {
+      return res.status(400).json({ error: `Campo "${campo}" deve ser booleano` });
+    }
+  }
+
+  const existente = await prisma.empresa.findUnique({ where: { id: req.params.id }, select: { aceitaPix: true, aceitaDinheiro: true, aceitaCartao: true } });
+  if (!existente) {
+    return res.status(404).json({ error: 'Empresa não encontrada' });
+  }
+  const resultado = {
+    aceitaPix: aceitaPix !== undefined ? aceitaPix : existente.aceitaPix,
+    aceitaDinheiro: aceitaDinheiro !== undefined ? aceitaDinheiro : existente.aceitaDinheiro,
+    aceitaCartao: aceitaCartao !== undefined ? aceitaCartao : existente.aceitaCartao,
+  };
+  if (!resultado.aceitaPix && !resultado.aceitaDinheiro && !resultado.aceitaCartao) {
+    return res.status(400).json({ error: 'Pelo menos uma forma de pagamento precisa ficar ativa' });
+  }
+
+  try {
+    const empresa = await prisma.empresa.update({ where: { id: req.params.id }, data: resultado });
     res.json(serializeEmpresa(empresa));
   } catch (error) {
     return handlePrismaError(error, res);
