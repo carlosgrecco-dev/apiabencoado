@@ -266,6 +266,61 @@ router.get('/:id', asyncHandler(async (req, res) => {
 
 /**
  * @openapi
+ * /empresas/{empresaId}/pedidos/{id}:
+ *   patch:
+ *     summary: Edita dados gerais de um pedido ainda não finalizado (cliente, endereço, observações, forma de pagamento) — não mexe em itens/valores, ver POST/DELETE /itens
+ *     tags: [Pedidos]
+ *     parameters:
+ *       - in: path
+ *         name: empresaId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Pedido atualizado
+ *       400:
+ *         description: Pedido já finalizado ou dados inválidos
+ *       404:
+ *         description: Pedido não encontrado
+ */
+router.patch('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+  const { clienteNome, clienteTelefone, endereco, bairro, referencia, observacoes, formaPagamento, trocoPara } = req.body;
+
+  const pedido = await prisma.pedido.findFirst({ where: { id: req.params.id, empresaId: req.params.empresaId } });
+  if (!pedido) {
+    return res.status(404).json({ error: 'Pedido não encontrado' });
+  }
+  if (['ENTREGUE', 'CANCELADO'].includes(pedido.status)) {
+    return res.status(400).json({ error: 'Este pedido já foi finalizado e não pode mais ser editado' });
+  }
+  if (formaPagamento !== undefined && !FORMAS_PAGAMENTO_VALIDAS.includes(formaPagamento)) {
+    return res.status(400).json({ error: `Campo "formaPagamento" deve ser um de: ${FORMAS_PAGAMENTO_VALIDAS.join(', ')}` });
+  }
+
+  const atualizado = await prisma.pedido.update({
+    where: { id: pedido.id },
+    data: {
+      ...(clienteNome !== undefined ? { clienteNome: clienteNome || null } : {}),
+      ...(clienteTelefone !== undefined ? { clienteTelefone: clienteTelefone || null } : {}),
+      ...(endereco !== undefined ? { endereco: endereco || null } : {}),
+      ...(bairro !== undefined ? { bairro: bairro || null } : {}),
+      ...(referencia !== undefined ? { referencia: referencia || null } : {}),
+      ...(observacoes !== undefined ? { observacoes: observacoes || null } : {}),
+      ...(formaPagamento !== undefined ? { formaPagamento } : {}),
+      ...(trocoPara !== undefined ? { trocoPara: trocoPara === null || trocoPara === '' ? null : Number(trocoPara) } : {}),
+    },
+    include: { itens: { include: { opcoesSelecionadas: true } }, motoboy: { select: { id: true, nome: true, latitudeAtual: true, longitudeAtual: true, localizacaoAtualizadaEm: true } } },
+  });
+
+  res.json(atualizado);
+}));
+
+/**
+ * @openapi
  * /empresas/{empresaId}/pedidos:
  *   post:
  *     summary: Cria um novo pedido (checkout do cliente)
