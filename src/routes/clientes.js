@@ -262,6 +262,184 @@ router.get('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
 
 /**
  * @openapi
+ * /empresas/{empresaId}/clientes/admin-resumo:
+ *   get:
+ *     summary: Clientes com pedidos/gasto/último pedido/atividade agregados, estatísticas do programa de fidelidade no período (com variação vs período anterior), ranking e atividades recentes — pra tela de gestão do admin
+ *     tags: [Clientes]
+ *     parameters:
+ *       - in: path
+ *         name: empresaId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *       - in: query
+ *         name: de
+ *         schema: { type: string, format: date }
+ *       - in: query
+ *         name: ate
+ *         schema: { type: string, format: date }
+ *     responses:
+ *       200:
+ *         description: Resumo de fidelidade
+ */
+router.get('/admin-resumo', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+  const empresaId = req.params.empresaId;
+  const agora = new Date();
+
+  const inicioAtual = req.query.de ? new Date(`${req.query.de}T00:00:00`) : new Date(agora.getFullYear(), agora.getMonth(), 1);
+  const fimAtual = req.query.ate ? new Date(`${req.query.ate}T23:59:59.999`) : agora;
+  const duracaoMs = fimAtual.getTime() - inicioAtual.getTime();
+  const fimAnterior = new Date(inicioAtual.getTime() - 1);
+  const inicioAnterior = new Date(fimAnterior.getTime() - duracaoMs);
+
+  const clientes = await prisma.cliente.findMany({ where: { empresaId } });
+
+  const WINDOW_ATIVO_DIAS = 60;
+  const limiteAtivo = new Date(agora);
+  limiteAtivo.setDate(limiteAtivo.getDate() - WINDOW_ATIVO_DIAS);
+
+  const [entreguesAgg, ultimoPedidoAgg, ativosRows] = await Promise.all([
+    prisma.pedido.groupBy({
+      by: ['clienteId'],
+      where: { empresaId, clienteId: { not: null }, status: 'ENTREGUE' },
+      _count: { _all: true },
+      _sum: { total: true },
+    }),
+    prisma.pedido.groupBy({
+      by: ['clienteId'],
+      where: { empresaId, clienteId: { not: null } },
+      _max: { createdAt: true },
+    }),
+    prisma.pedido.findMany({
+      where: { empresaId, clienteId: { not: null }, status: 'ENTREGUE', entregueEm: { gte: limiteAtivo } },
+      select: { clienteId: true },
+      distinct: ['clienteId'],
+    }),
+  ]);
+
+  const entreguesMap = new Map(entreguesAgg.map((r) => [r.clienteId, { pedidosCount: r._count._all, gastoTotal: Number(r._sum.total || 0) }]));
+  const ultimoPedidoMap = new Map(ultimoPedidoAgg.map((r) => [r.clienteId, r._max.createdAt]));
+  const ativosSet = new Set(ativosRows.map((r) => r.clienteId));
+
+  const clientesComDados = clientes.map((c) => ({
+    ...serializeCliente(c),
+    pedidosCount: entreguesMap.get(c.id)?.pedidosCount || 0,
+    gastoTotal: entreguesMap.get(c.id)?.gastoTotal || 0,
+    ultimoPedidoEm: ultimoPedidoMap.get(c.id) || null,
+    ativo: ativosSet.has(c.id),
+  }));
+
+  /** Economia gerada pra fidelidade (cashback usado + valor do item grátis) num intervalo — só o que dá pra reconstruir com dado real, sem tabela de log dedicada. */
+  const economiaNoIntervalo = async (inicio, fim) => {
+    const [cashbackAgg, pedidosGratis] = await Promise.all([
+      prisma.pedido.aggregate({
+        where: { empresaId, createdAt: { gte: inicio, lte: fim }, cashbackUsado: { not: null } },
+        _sum: { cashbackUsado: true },
+      }),
+      prisma.pedido.findMany({
+        where: { empresaId, createdAt: { gte: inicio, lte: fim }, itemGratisResgatado: true },
+        include: { itens: { select: { precoUnitario: true } } },
+      }),
+    ]);
+    const valorItensGratis = pedidosGratis.reduce((soma, p) => {
+      if (p.itens.length === 0) return soma;
+      return soma + Math.min(...p.itens.map((i) => Number(i.precoUnitario)));
+    }, 0);
+    return Number(cashbackAgg._sum.cashbackUsado || 0) + valorItensGratis;
+  };
+
+  const carimbosNoIntervalo = async (inicio, fim) => {
+    const agg = await prisma.pedido.aggregate({
+      where: { empresaId, status: 'ENTREGUE', entregueEm: { gte: inicio, lte: fim }, unidadesFidelidadeCreditadas: { not: null } },
+      _sum: { unidadesFidelidadeCreditadas: true },
+    });
+    return agg._sum.unidadesFidelidadeCreditadas || 0;
+  };
+
+  const resgatesNoIntervalo = (inicio, fim) => prisma.pedido.count({
+    where: { empresaId, createdAt: { gte: inicio, lte: fim }, itemGratisResgatado: true },
+  });
+
+  const [
+    carimbosAtual, carimbosAnterior,
+    resgatesAtual, resgatesAnterior,
+    economiaAtual, economiaAnterior,
+  ] = await Promise.all([
+    carimbosNoIntervalo(inicioAtual, fimAtual),
+    carimbosNoIntervalo(inicioAnterior, fimAnterior),
+    resgatesNoIntervalo(inicioAtual, fimAtual),
+    resgatesNoIntervalo(inicioAnterior, fimAnterior),
+    economiaNoIntervalo(inicioAtual, fimAtual),
+    economiaNoIntervalo(inicioAnterior, fimAnterior),
+  ]);
+
+  const clientesCadastradosAtual = clientes.length;
+  const clientesCadastradosAnterior = clientes.filter((c) => c.createdAt <= fimAnterior).length;
+
+  const ranking = [...clientes]
+    .sort((a, b) => b.totalUnidadesCompradas - a.totalUnidadesCompradas)
+    .slice(0, 5)
+    .map((c) => ({ id: c.id, nome: c.nome, totalUnidadesCompradas: c.totalUnidadesCompradas }));
+
+  // Atividades recentes: eventos reais de fidelidade/cashback extraídos dos próprios pedidos (sem tabela de log dedicada).
+  const pedidosComEventos = await prisma.pedido.findMany({
+    where: {
+      empresaId,
+      clienteId: { not: null },
+      OR: [
+        { unidadesFidelidadeCreditadas: { not: null } },
+        { itemGratisResgatado: true },
+        { cashbackUsado: { not: null } },
+        { cashbackCreditado: { not: null } },
+      ],
+    },
+    orderBy: { createdAt: 'desc' },
+    take: 30,
+    include: { cliente: { select: { nome: true } } },
+  });
+
+  const atividades = [];
+  for (const p of pedidosComEventos) {
+    const nome = p.cliente?.nome || '—';
+    if (p.itemGratisResgatado) {
+      atividades.push({ tipo: 'RESGATE', clienteNome: nome, pedidoNumero: p.numero, data: p.createdAt });
+    }
+    if (p.cashbackUsado != null) {
+      atividades.push({ tipo: 'CASHBACK_USADO', clienteNome: nome, valor: Number(p.cashbackUsado), pedidoNumero: p.numero, data: p.createdAt });
+    }
+    if (p.unidadesFidelidadeCreditadas) {
+      atividades.push({ tipo: 'CARIMBO', clienteNome: nome, unidades: p.unidadesFidelidadeCreditadas, pedidoNumero: p.numero, data: p.entregueEm || p.createdAt });
+    }
+    if (p.cashbackCreditado != null) {
+      atividades.push({ tipo: 'CASHBACK_CREDITADO', clienteNome: nome, valor: Number(p.cashbackCreditado), pedidoNumero: p.numero, data: p.entregueEm || p.createdAt });
+    }
+  }
+  atividades.sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime());
+
+  res.json({
+    periodo: { de: inicioAtual.toISOString(), ate: fimAtual.toISOString() },
+    stats: {
+      clientesCadastrados: { atual: clientesCadastradosAtual, anterior: clientesCadastradosAnterior },
+      clientesAtivos: ativosSet.size,
+      clientesAtivosPercent: clientes.length > 0 ? (ativosSet.size / clientes.length) * 100 : 0,
+      carimbosEmitidos: { atual: carimbosAtual, anterior: carimbosAnterior },
+      itensGratisResgatados: { atual: resgatesAtual, anterior: resgatesAnterior },
+      economiaGerada: { atual: economiaAtual, anterior: economiaAnterior },
+    },
+    clientes: clientesComDados,
+    ranking,
+    atividadesRecentes: atividades.slice(0, 10),
+    config: {
+      fidelidadeValidadeDias: req.empresa.fidelidadeValidadeDias,
+      cashbackPercent: req.empresa.cashbackPercent != null ? Number(req.empresa.cashbackPercent) : 0,
+      fidelidadeNomeItem: req.empresa.fidelidadeNomeItem,
+      indicacaoRecompensaUnidades: req.empresa.indicacaoRecompensaUnidades,
+      unidadesParaPremio: 10,
+    },
+  });
+}));
+
+/**
+ * @openapi
  * /empresas/{empresaId}/clientes/{id}:
  *   get:
  *     summary: Busca o perfil do cliente (dados de fidelidade)
