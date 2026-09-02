@@ -1072,6 +1072,8 @@ router.post('/admin-login', asyncHandler(async (req, res) => {
     pdvHabilitado: empresa.pdvHabilitado,
     pdvMesaAbertaContinua: empresa.pdvMesaAbertaContinua,
     pdvPermiteSplitPagamento: empresa.pdvPermiteSplitPagamento,
+    impressoraNome: empresa.impressoraNome,
+    impressoraMacAddress: empresa.impressoraMacAddress,
     token,
   });
 }));
@@ -1494,6 +1496,58 @@ router.put('/:id/formas-pagamento', requireEmpresaAdmin('id'), asyncHandler(asyn
 
   try {
     const empresa = await prisma.empresa.update({ where: { id: req.params.id }, data: resultado });
+    res.json(serializeEmpresa(empresa));
+  } catch (error) {
+    return handlePrismaError(error, res);
+  }
+}));
+
+/**
+ * @openapi
+ * /empresas/{id}/impressora-config:
+ *   put:
+ *     summary: Sincroniza a impressora térmica Bluetooth configurada no app do lojista — o pareamento em si só acontece no aparelho; este endpoint só espelha nome/MAC pro admin web ter visibilidade e poder resetar remotamente (envie null nos dois campos pra limpar)
+ *     tags: [Empresas]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               nome: { type: string, nullable: true }
+ *               macAddress: { type: string, nullable: true }
+ *     responses:
+ *       200:
+ *         description: Configuração atualizada
+ *       400:
+ *         description: Dados inválidos
+ *       404:
+ *         description: Empresa não encontrada
+ */
+router.put('/:id/impressora-config', requireEmpresaAdmin('id'), asyncHandler(async (req, res) => {
+  const { nome, macAddress } = req.body;
+
+  if (nome !== undefined && nome !== null && typeof nome !== 'string') {
+    return res.status(400).json({ error: 'Campo "nome" deve ser texto ou null' });
+  }
+  if (macAddress !== undefined && macAddress !== null && typeof macAddress !== 'string') {
+    return res.status(400).json({ error: 'Campo "macAddress" deve ser texto ou null' });
+  }
+
+  try {
+    const empresa = await prisma.empresa.update({
+      where: { id: req.params.id },
+      data: {
+        ...(nome !== undefined ? { impressoraNome: nome } : {}),
+        ...(macAddress !== undefined ? { impressoraMacAddress: macAddress } : {}),
+      },
+    });
     res.json(serializeEmpresa(empresa));
   } catch (error) {
     return handlePrismaError(error, res);

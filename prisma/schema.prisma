@@ -129,6 +129,11 @@ model Empresa {
   /// Cada tenant escolhe: false = uma forma de pagamento por venda (padrão); true = permite
   /// dividir a mesma venda em mais de uma forma (ex: metade Pix, metade dinheiro).
   pdvPermiteSplitPagamento Boolean @default(false) @map("pdv_permite_split_pagamento")
+  /// Impressora térmica Bluetooth configurada no app do lojista (SettingsStore/ImpressoraConfig
+  /// no Flutter) — espelhada aqui só pra dar visibilidade/reset remoto no admin web; o pareamento
+  /// em si é sempre feito no aparelho (Bluetooth é local ao celular, não dá pra parear pela web).
+  impressoraNome           String? @map("impressora_nome")
+  impressoraMacAddress     String? @map("impressora_mac_address")
 
   /// Unidades de fidelidade por indicação concluída — só usado quando habilitarIndicacaoAvancada=true (senão usa o padrão fixo de 3).
   indicacaoRecompensaUnidades Int @default(3) @map("indicacao_recompensa_unidades")
