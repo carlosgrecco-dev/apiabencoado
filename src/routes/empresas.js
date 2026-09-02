@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const prisma = require('../lib/prisma');
 const { calcularStatusLoja } = require('../lib/statusLoja');
 const { registrarLog } = require('../lib/auditLog');
+const { registrarAtividadeLoja } = require('../lib/atividadeLoja');
 const { signToken, requireSuperAdmin, requireEmpresaAdmin } = require('../lib/auth');
 const { gerarCodigoIndicacaoEmpresaUnico } = require('../lib/indicacaoEmpresa');
 const { gerarIconePwa, TAMANHOS_VALIDOS } = require('../lib/pwaIcon');
@@ -1496,6 +1497,12 @@ router.put('/:id/formas-pagamento', requireEmpresaAdmin('id'), asyncHandler(asyn
 
   try {
     const empresa = await prisma.empresa.update({ where: { id: req.params.id }, data: resultado });
+    registrarAtividadeLoja({
+      empresaId: req.params.id,
+      tipo: 'CONFIG_PAGAMENTO_ALTERADA',
+      ator: 'Admin',
+      descricao: `Formas de pagamento atualizadas (PIX: ${resultado.aceitaPix ? 'sim' : 'não'}, Dinheiro: ${resultado.aceitaDinheiro ? 'sim' : 'não'}, Cartão: ${resultado.aceitaCartao ? 'sim' : 'não'})`,
+    });
     res.json(serializeEmpresa(empresa));
   } catch (error) {
     return handlePrismaError(error, res);
@@ -1548,6 +1555,57 @@ router.put('/:id/impressora-config', requireEmpresaAdmin('id'), asyncHandler(asy
         ...(macAddress !== undefined ? { impressoraMacAddress: macAddress } : {}),
       },
     });
+    res.json(serializeEmpresa(empresa));
+  } catch (error) {
+    return handlePrismaError(error, res);
+  }
+}));
+
+/**
+ * @openapi
+ * /empresas/{id}/dados-contato:
+ *   patch:
+ *     summary: A própria loja atualiza seus dados de contato (nome do responsável, e-mail, telefone) — nome da loja, CNPJ/CPF, slug e usuário de login continuam só o Super Admin alterando
+ *     tags: [Empresas]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               responsavelNome: { type: string }
+ *               email: { type: string }
+ *               telefone: { type: string }
+ *     responses:
+ *       200:
+ *         description: Dados atualizados
+ *       400:
+ *         description: Dados inválidos
+ */
+router.patch('/:id/dados-contato', requireEmpresaAdmin('id'), asyncHandler(async (req, res) => {
+  const { responsavelNome, email, telefone } = req.body;
+  const data = {};
+  if (responsavelNome !== undefined) {
+    if (!String(responsavelNome).trim()) return res.status(400).json({ error: 'Campo "responsavelNome" não pode ficar vazio' });
+    data.responsavelNome = String(responsavelNome).trim();
+  }
+  if (email !== undefined) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'Campo "email" inválido' });
+    data.email = String(email).trim();
+  }
+  if (telefone !== undefined) {
+    const digitos = String(telefone).replace(/\D/g, '');
+    if (digitos.length < 10) return res.status(400).json({ error: 'Campo "telefone" incompleto' });
+    data.telefone = digitos;
+  }
+
+  try {
+    const empresa = await prisma.empresa.update({ where: { id: req.params.id }, data });
     res.json(serializeEmpresa(empresa));
   } catch (error) {
     return handlePrismaError(error, res);

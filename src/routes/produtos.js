@@ -2,6 +2,7 @@ const { Router } = require('express');
 const prisma = require('../lib/prisma');
 const loadEmpresa = require('../lib/loadEmpresa');
 const { requireEmpresaAdmin } = require('../lib/auth');
+const { registrarAtividadeLoja } = require('../lib/atividadeLoja');
 
 const router = Router({ mergeParams: true });
 
@@ -314,6 +315,13 @@ router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
     include: { categoria: true },
   });
 
+  registrarAtividadeLoja({
+    empresaId: req.params.empresaId,
+    tipo: 'PRODUTO_CRIADO',
+    ator: 'Admin',
+    descricao: `Produto "${produto.nome}" criado`,
+  });
+
   res.status(201).json(comDisponibilidade(produto));
 }));
 
@@ -582,6 +590,14 @@ router.delete('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
   }
 
   await prisma.produto.delete({ where: { id: req.params.id } });
+
+  registrarAtividadeLoja({
+    empresaId: req.params.empresaId,
+    tipo: 'PRODUTO_REMOVIDO',
+    ator: 'Admin',
+    descricao: `Produto "${existente.nome}" removido`,
+  });
+
   res.status(204).send();
 }));
 

@@ -11,6 +11,8 @@ const { criarNotificacaoCliente } = require('../lib/notificacoesCliente');
 const { requireEmpresaAdmin, requireCliente } = require('../lib/auth');
 const { montarItensPedido, decrementarEstoque, ErroPedidoItens } = require('../lib/pedidoItens');
 const { finalizarComoEntregue } = require('../lib/pedidoFinalizacao');
+const { dispararWebhook } = require('../lib/webhooks');
+const { registrarAtividadeLoja } = require('../lib/atividadeLoja');
 
 const router = Router({ mergeParams: true });
 
@@ -667,6 +669,10 @@ router.post('/', asyncHandler(async (req, res) => {
     throw error;
   }
 
+  dispararWebhook(req.params.empresaId, 'PEDIDO_CRIADO', {
+    id: pedido.id, numero: pedido.numero, tipoPedido: pedido.tipoPedido, total: pedido.total, clienteNome: pedido.clienteNome,
+  }).catch(() => {});
+
   res.status(201).json(pedido);
 }));
 
@@ -876,6 +882,19 @@ router.patch('/:id/status', asyncHandler(async (req, res, next) => {
         url,
       }).catch(() => {});
     }
+  }
+
+  dispararWebhook(req.params.empresaId, 'PEDIDO_STATUS_ALTERADO', {
+    id: atualizado.id, numero: atualizado.numero, status: atualizado.status,
+  }).catch(() => {});
+  if (atualizado.status === 'CANCELADO') {
+    dispararWebhook(req.params.empresaId, 'PEDIDO_CANCELADO', { id: atualizado.id, numero: atualizado.numero }).catch(() => {});
+    registrarAtividadeLoja({
+      empresaId: req.params.empresaId,
+      tipo: 'PEDIDO_CANCELADO',
+      ator: req.auth.role === 'EMPRESA_ADMIN' ? 'Admin' : 'Motoboy',
+      descricao: `Pedido #${atualizado.numero} cancelado`,
+    });
   }
 
   res.json(atualizado);
@@ -1332,6 +1351,10 @@ router.post('/:id/avaliar-pedido', requireCliente(), asyncHandler(async (req, re
     },
     include: { itens: { include: { opcoesSelecionadas: true } }, motoboy: { select: { id: true, nome: true, latitudeAtual: true, longitudeAtual: true, localizacaoAtualizadaEm: true } } },
   });
+
+  dispararWebhook(req.params.empresaId, 'AVALIACAO_RECEBIDA', {
+    pedidoId: atualizado.id, numero: atualizado.numero, nota, comentario: comentario || null,
+  }).catch(() => {});
 
   res.json(atualizado);
 }));

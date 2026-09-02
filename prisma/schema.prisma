@@ -177,6 +177,9 @@ model Empresa {
   contasPagar       ContaPagar[]
   contasReceber     ContaReceber[]
   fornecedores      Fornecedor[]
+  usuariosAdmin     UsuarioAdmin[]
+  logsAtividade     LogAtividadeLoja[]
+  webhookConfig     WebhookConfig?
 
   planoId String? @map("plano_id") @db.Uuid
   plano   Plano?  @relation(fields: [planoId], references: [id], onDelete: SetNull)
@@ -1280,4 +1283,87 @@ model Fornecedor {
   updatedAt   DateTime @updatedAt @map("updated_at")
 
   @@map("fornecedores")
+}
+
+enum PapelUsuarioAdmin {
+  GERENTE
+  OPERADOR_CAIXA
+  ATENDENTE
+}
+
+/// Segundo login da loja, além do master (Empresa.usuario/senhaHash) — aditivo, o login master
+/// continua funcionando exatamente como hoje. Cada papel libera um conjunto fixo de grupos do
+/// menu no admin web (não é um editor de permissão granular livre). Diferente de OperadorPdv, que
+/// é só um PIN de 4 dígitos pra identificar quem operou o caixa no PDV — propósito totalmente
+/// diferente.
+model UsuarioAdmin {
+  id        String            @id @default(uuid()) @db.Uuid
+  empresaId String            @map("empresa_id") @db.Uuid
+  empresa   Empresa           @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  nome      String
+  email     String
+  senhaHash String            @map("senha_hash")
+  papel     PapelUsuarioAdmin
+  ativo     Boolean           @default(true)
+  createdAt DateTime          @default(now()) @map("created_at")
+  updatedAt DateTime          @updatedAt @map("updated_at")
+
+  @@unique([empresaId, email])
+  @@map("usuarios_admin")
+}
+
+enum TipoLogAtividadeLoja {
+  PEDIDO_CANCELADO
+  PRODUTO_CRIADO
+  PRODUTO_REMOVIDO
+  CONFIG_PAGAMENTO_ALTERADA
+  USUARIO_ADMIN_CRIADO
+  USUARIO_ADMIN_REMOVIDO
+}
+
+/// Log de atividade da própria loja (diferente do LogAuditoria, que é da plataforma e só o Super
+/// Admin vê) — só as ações de maior valor, não instrumenta toda rota do sistema.
+model LogAtividadeLoja {
+  id        String               @id @default(uuid()) @db.Uuid
+  empresaId String               @map("empresa_id") @db.Uuid
+  empresa   Empresa              @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  tipo      TipoLogAtividadeLoja
+  ator      String?
+  descricao String
+  createdAt DateTime             @default(now()) @map("created_at")
+
+  @@map("logs_atividade_loja")
+}
+
+/// Config de webhook por loja (singular — uma URL só por enquanto) pra notificar um sistema
+/// externo quando eventos importantes acontecem (pedido criado/status mudou/cancelado, avaliação
+/// recebida).
+model WebhookConfig {
+  id        String   @id @default(uuid()) @db.Uuid
+  empresaId String   @unique @map("empresa_id") @db.Uuid
+  empresa   Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  url       String
+  eventos   String[] @default([])
+  secret    String
+  ativo     Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  logs WebhookLog[]
+
+  @@map("webhook_configs")
+}
+
+/// Histórico de disparo do webhook — guarda só o suficiente pra loja conferir se está entregando.
+model WebhookLog {
+  id              String        @id @default(uuid()) @db.Uuid
+  webhookConfigId String        @map("webhook_config_id") @db.Uuid
+  webhookConfig   WebhookConfig @relation(fields: [webhookConfigId], references: [id], onDelete: Cascade)
+  evento          String
+  statusCode      Int?          @map("status_code")
+  sucesso         Boolean
+  erro            String?
+  createdAt       DateTime      @default(now()) @map("created_at")
+
+  @@map("webhook_logs")
 }
