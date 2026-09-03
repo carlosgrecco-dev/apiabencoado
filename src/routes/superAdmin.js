@@ -520,4 +520,63 @@ router.patch('/chamados-lojistas/:id', requireSuperAdmin, asyncHandler(async (re
   res.json(chamado);
 }));
 
+/**
+ * @openapi
+ * /super-admin/notificacoes:
+ *   get:
+ *     summary: Agrega sinais reais que pedem atenção do Super Admin (faturas pendentes, leads novos, chamados abertos, tenants inativos) num feed único
+ *     tags: [SuperAdmin]
+ *     responses:
+ *       200:
+ *         description: Lista de notificações, mais recente primeiro
+ */
+router.get('/notificacoes', requireSuperAdmin, asyncHandler(async (req, res) => {
+  const trintaDiasAtras = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+  const [faturasPendentes, leadsNovos, chamadosAbertos, tenantsInativos] = await Promise.all([
+    prisma.fatura.findMany({
+      where: { status: 'PENDENTE', empresa: { ehDemo: false } },
+      include: { empresa: { select: { nome: true } } },
+      orderBy: { vencimento: 'asc' },
+      take: 10,
+    }),
+    prisma.leadComercial.findMany({
+      where: { status: 'NOVO' },
+      orderBy: { createdAt: 'desc' },
+      take: 10,
+    }),
+    prisma.ticketSuporte.findMany({
+      where: { clienteId: null, status: 'ABERTO' },
+      include: { empresa: { select: { nome: true } } },
+      orderBy: { createdAt: 'desc' },
+      take: 10,
+    }),
+    prisma.empresa.findMany({
+      where: {
+        ehDemo: false, empresaAtiva: true, createdAt: { lt: trintaDiasAtras },
+        OR: [{ ultimoAcessoAdminEm: null }, { ultimoAcessoAdminEm: { lt: trintaDiasAtras } }],
+      },
+      select: { id: true, nome: true, ultimoAcessoAdminEm: true },
+      take: 10,
+    }),
+  ]);
+
+  const notificacoes = [
+    ...faturasPendentes.map((f) => ({
+      tipo: 'FATURA_PENDENTE',
+      descricao: `Fatura de ${f.empresa.nome} pendente (vence ${new Date(f.vencimento).toLocaleDateString('pt-BR')})`,
+      data: f.vencimento,
+    })),
+    ...leadsNovos.map((l) => ({ tipo: 'LEAD_NOVO', descricao: `Novo lead: ${l.nome}`, data: l.createdAt })),
+    ...chamadosAbertos.map((c) => ({ tipo: 'CHAMADO_ABERTO', descricao: `Chamado aberto de ${c.empresa.nome}: ${c.assunto}`, data: c.createdAt })),
+    ...tenantsInativos.map((t) => ({
+      tipo: 'TENANT_INATIVO',
+      descricao: `${t.nome} sem acesso ao admin há mais de 30 dias`,
+      data: t.ultimoAcessoAdminEm || new Date(0),
+    })),
+  ].sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime());
+
+  res.json({ notificacoes, total: notificacoes.length });
+}));
+
 module.exports = router;
