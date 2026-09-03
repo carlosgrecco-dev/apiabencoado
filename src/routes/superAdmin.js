@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const prisma = require('../lib/prisma');
 const { signToken, requireSuperAdmin } = require('../lib/auth');
 const { agregarDispositivos } = require('../lib/userAgentStats');
+const { gerarBackup, listarBackups, caminhoBackup } = require('../lib/backup');
 
 const router = Router();
 
@@ -615,6 +616,107 @@ router.get('/recursos-plataforma', requireSuperAdmin, asyncHandler(async (req, r
   });
 
   res.json({ totalEmpresas, recursos });
+}));
+
+/**
+ * @openapi
+ * /super-admin/monitoramento:
+ *   get:
+ *     summary: Saúde real da plataforma — conexão com o banco, erros recentes e status de gateways
+ *     tags: [SuperAdmin]
+ *     responses:
+ *       200:
+ *         description: Sinais de saúde e histórico de backups
+ */
+router.get('/monitoramento', requireSuperAdmin, asyncHandler(async (req, res) => {
+  const vinteQuatroHorasAtras = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+  let bancoOk = true;
+  let bancoErro = null;
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+  } catch (err) {
+    bancoOk = false;
+    bancoErro = err.message;
+  }
+
+  const [errosUltimas24h, totalGateways, gatewaysAtivos, backups] = await Promise.all([
+    prisma.logAuditoria.count({ where: { tipo: 'ERRO', createdAt: { gte: vinteQuatroHorasAtras } } }),
+    prisma.gatewayPagamento.count(),
+    prisma.gatewayPagamento.count({ where: { ativo: true } }),
+    Promise.resolve(listarBackups()),
+  ]);
+
+  res.json({
+    banco: { ok: bancoOk, erro: bancoErro },
+    errosUltimas24h,
+    gateways: { total: totalGateways, ativos: gatewaysAtivos },
+    backups: {
+      total: backups.length,
+      ultimo: backups[0] || null,
+      lista: backups.slice(0, 20),
+    },
+  });
+}));
+
+/**
+ * @openapi
+ * /super-admin/backups:
+ *   post:
+ *     summary: Gera um backup sob demanda — snapshot lógico de todas as tabelas via Prisma (não é um dump binário do Postgres)
+ *     tags: [SuperAdmin]
+ *     responses:
+ *       201:
+ *         description: Backup gerado
+ *       500:
+ *         description: Falha ao gerar o backup
+ */
+router.post('/backups', requireSuperAdmin, asyncHandler(async (req, res) => {
+  try {
+    const resultado = await gerarBackup();
+    res.status(201).json(resultado);
+  } catch (err) {
+    res.status(500).json({ error: `Não foi possível gerar o backup: ${err.message}` });
+  }
+}));
+
+/**
+ * @openapi
+ * /super-admin/backups:
+ *   get:
+ *     summary: Lista os backups já gerados
+ *     tags: [SuperAdmin]
+ *     responses:
+ *       200:
+ *         description: Lista de backups, mais recente primeiro
+ */
+router.get('/backups', requireSuperAdmin, asyncHandler(async (req, res) => {
+  res.json(listarBackups());
+}));
+
+/**
+ * @openapi
+ * /super-admin/backups/{arquivo}:
+ *   get:
+ *     summary: Baixa um backup específico
+ *     tags: [SuperAdmin]
+ *     parameters:
+ *       - in: path
+ *         name: arquivo
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Arquivo do backup
+ *       404:
+ *         description: Backup não encontrado
+ */
+router.get('/backups/:arquivo', requireSuperAdmin, asyncHandler(async (req, res) => {
+  const caminho = caminhoBackup(req.params.arquivo);
+  if (!caminho) {
+    return res.status(404).json({ error: 'Backup não encontrado' });
+  }
+  res.download(caminho, req.params.arquivo);
 }));
 
 module.exports = router;
