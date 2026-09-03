@@ -86,6 +86,7 @@ const FUNCIONALIDADES = [
   { campo: 'habilitarIndicacaoAvancada', label: 'Indicação avançada' },
   { campo: 'habilitarAvaliacaoDetalhada', label: 'Avaliação detalhada' },
   { campo: 'habilitarCentralSuporte', label: 'Central de suporte' },
+  { campo: 'pdvHabilitado', label: 'PDV — balcão e mesa' },
 ];
 
 router.get('/dashboard', requireSuperAdmin, asyncHandler(async (req, res) => {
@@ -125,7 +126,7 @@ router.get('/dashboard', requireSuperAdmin, asyncHandler(async (req, res) => {
         habilitarFavoritos: true, habilitarPedirDeNovo: true, habilitarRankingFidelidade: true,
         habilitarAgendamento: true, habilitarAvaliacaoComFotos: true, habilitarNotificacoesInApp: true,
         habilitarMissoes: true, habilitarIndicacaoAvancada: true, habilitarAvaliacaoDetalhada: true,
-        habilitarCentralSuporte: true,
+        habilitarCentralSuporte: true, pdvHabilitado: true,
       },
     }),
     prisma.fatura.count({ where: { status: 'PENDENTE', empresa: { ehDemo: false } } }),
@@ -577,6 +578,43 @@ router.get('/notificacoes', requireSuperAdmin, asyncHandler(async (req, res) => 
   ].sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime());
 
   res.json({ notificacoes, total: notificacoes.length });
+}));
+
+/**
+ * @openapi
+ * /super-admin/recursos-plataforma:
+ *   get:
+ *     summary: Catálogo das funcionalidades opt-in da plataforma, com quais/quantos tenants ligaram cada uma
+ *     tags: [SuperAdmin]
+ *     responses:
+ *       200:
+ *         description: Lista de recursos com os tenants que usam cada um
+ */
+router.get('/recursos-plataforma', requireSuperAdmin, asyncHandler(async (req, res) => {
+  const totalEmpresas = await prisma.empresa.count({ where: { ehDemo: false } });
+  const empresas = await prisma.empresa.findMany({
+    where: { ehDemo: false },
+    select: {
+      id: true, nome: true, slug: true,
+      habilitarFavoritos: true, habilitarPedirDeNovo: true, habilitarRankingFidelidade: true,
+      habilitarAgendamento: true, habilitarAvaliacaoComFotos: true, habilitarNotificacoesInApp: true,
+      habilitarMissoes: true, habilitarIndicacaoAvancada: true, habilitarAvaliacaoDetalhada: true,
+      habilitarCentralSuporte: true, pdvHabilitado: true,
+    },
+  });
+
+  const recursos = FUNCIONALIDADES.map(({ campo, label }) => {
+    const tenants = empresas.filter((e) => e[campo]).map((e) => ({ id: e.id, nome: e.nome, slug: e.slug }));
+    return {
+      campo,
+      label,
+      totalTenants: tenants.length,
+      percentual: totalEmpresas > 0 ? Math.round((tenants.length / totalEmpresas) * 100) : 0,
+      tenants,
+    };
+  });
+
+  res.json({ totalEmpresas, recursos });
 }));
 
 module.exports = router;
