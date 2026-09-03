@@ -98,7 +98,12 @@ router.get('/dashboard', requireSuperAdmin, asyncHandler(async (req, res) => {
   // Lojas de demonstração (ehDemo=true) ficam fora de todo agregado da plataforma — funcionam
   // normalmente (têm pedidos, clientes etc.), mas não podem distorcer GMV/comissão/contagens
   // reais mostradas aqui pro Super Admin.
-  const [totalEmpresas, empresasAtivas, totalClientes, totalMotoboysAtivos, novosTenantsNoPeriodo, entregues, ultimoPedidoPorEmpresa, empresas] = await Promise.all([
+  const trintaDiasAtras = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+  const [
+    totalEmpresas, empresasAtivas, totalClientes, totalMotoboysAtivos, novosTenantsNoPeriodo,
+    entregues, ultimoPedidoPorEmpresa, empresas, faturasPendentes, tenantsInativos30Dias,
+  ] = await Promise.all([
     prisma.empresa.count({ where: { ehDemo: false } }),
     prisma.empresa.count({ where: { empresaAtiva: true, ehDemo: false } }),
     prisma.cliente.count({ where: { empresa: { ehDemo: false } } }),
@@ -106,7 +111,10 @@ router.get('/dashboard', requireSuperAdmin, asyncHandler(async (req, res) => {
     prisma.empresa.count({ where: { createdAt: range, ehDemo: false } }),
     prisma.pedido.findMany({
       where: { status: 'ENTREGUE', createdAt: range, empresa: { ehDemo: false } },
-      select: { total: true, empresaId: true, createdAt: true, userAgent: true },
+      select: {
+        total: true, empresaId: true, createdAt: true, userAgent: true, formaPagamento: true,
+        itens: { select: { quantidade: true, precoUnitario: true, produto: { select: { categoriaId: true, categoria: { select: { nome: true } } } } } },
+      },
     }),
     prisma.pedido.groupBy({ by: ['empresaId'], where: { status: 'ENTREGUE', empresa: { ehDemo: false } }, _max: { createdAt: true } }),
     prisma.empresa.findMany({
@@ -118,6 +126,15 @@ router.get('/dashboard', requireSuperAdmin, asyncHandler(async (req, res) => {
         habilitarAgendamento: true, habilitarAvaliacaoComFotos: true, habilitarNotificacoesInApp: true,
         habilitarMissoes: true, habilitarIndicacaoAvancada: true, habilitarAvaliacaoDetalhada: true,
         habilitarCentralSuporte: true,
+      },
+    }),
+    prisma.fatura.count({ where: { status: 'PENDENTE', empresa: { ehDemo: false } } }),
+    // Só conta como inativo quem já é tenant há mais de 30 dias (senão todo cadastro novo, que
+    // ainda não teve tempo de logar, apareceria injustamente como "inativo").
+    prisma.empresa.count({
+      where: {
+        ehDemo: false, empresaAtiva: true, createdAt: { lt: trintaDiasAtras },
+        OR: [{ ultimoAcessoAdminEm: null }, { ultimoAcessoAdminEm: { lt: trintaDiasAtras } }],
       },
     }),
   ]);
@@ -133,23 +150,53 @@ router.get('/dashboard', requireSuperAdmin, asyncHandler(async (req, res) => {
   }, 0);
 
   const porEmpresaMap = new Map();
+  const faturamentoPorEmpresaMap = new Map();
   for (const p of entregues) {
     porEmpresaMap.set(p.empresaId, (porEmpresaMap.get(p.empresaId) || 0) + 1);
+    faturamentoPorEmpresaMap.set(p.empresaId, (faturamentoPorEmpresaMap.get(p.empresaId) || 0) + Number(p.total));
   }
   const lojasComVendaNoPeriodo = porEmpresaMap.size;
 
-  // Tendência de pedidos por dia (plataforma inteira) — mesmo padrão já usado no CRM de cada loja.
+  // Tendência de faturamento + pedidos por dia (plataforma inteira) — mesmo padrão já usado no CRM de cada loja.
   const porDiaMap = new Map();
   for (const p of entregues) {
     const dia = p.createdAt.toISOString().slice(0, 10);
-    porDiaMap.set(dia, (porDiaMap.get(dia) || 0) + 1);
+    const atual = porDiaMap.get(dia) || { pedidos: 0, faturamento: 0 };
+    atual.pedidos += 1;
+    atual.faturamento += Number(p.total);
+    porDiaMap.set(dia, atual);
   }
   const pedidosPorDia = Array.from(porDiaMap.entries())
-    .map(([data, pedidos]) => ({ data, pedidos }))
+    .map(([data, v]) => ({ data, pedidos: v.pedidos, faturamento: v.faturamento }))
     .sort((a, b) => a.data.localeCompare(b.data));
 
   // Dispositivo/navegador agregado — a partir do User-Agent salvo em cada pedido do período.
   const { dispositivos, navegadores } = agregarDispositivos(entregues.map((p) => p.userAgent));
+
+  // Forma de pagamento — mesmas 4 formas reais do sistema (PIX/Dinheiro/Cartão/Múltiplo).
+  const porFormaPagamentoMap = new Map();
+  for (const p of entregues) {
+    porFormaPagamentoMap.set(p.formaPagamento, (porFormaPagamentoMap.get(p.formaPagamento) || 0) + 1);
+  }
+  const porFormaPagamento = Array.from(porFormaPagamentoMap.entries()).map(([forma, quantidade]) => ({ forma, quantidade }));
+
+  // Categoria — junta PedidoItem → Produto → Categoria (mesmo padrão do CRM/Dashboard de cada loja).
+  const porCategoriaMap = new Map();
+  for (const p of entregues) {
+    for (const item of p.itens) {
+      const categoriaId = item.produto?.categoriaId || 'sem-categoria';
+      const nome = item.produto?.categoria?.nome || 'Sem categoria';
+      const atual = porCategoriaMap.get(categoriaId) || { categoriaId, nome, quantidade: 0, receita: 0 };
+      atual.quantidade += item.quantidade;
+      atual.receita += Number(item.precoUnitario) * item.quantidade;
+      porCategoriaMap.set(categoriaId, atual);
+    }
+  }
+  const receitaTotalCategorias = Array.from(porCategoriaMap.values()).reduce((s, c) => s + c.receita, 0);
+  const porCategoria = Array.from(porCategoriaMap.values())
+    .map((c) => ({ ...c, percentual: receitaTotalCategorias > 0 ? (c.receita / receitaTotalCategorias) * 100 : 0 }))
+    .sort((a, b) => b.receita - a.receita)
+    .slice(0, 10);
 
   // Uso de funcionalidades — quantos tenants ligaram cada opt-in (+ cashback, que usa um percentual em vez de boolean).
   const usoFuncionalidades = FUNCIONALIDADES.map(({ campo, label }) => {
@@ -163,19 +210,58 @@ router.get('/dashboard', requireSuperAdmin, asyncHandler(async (req, res) => {
     percentual: totalEmpresas > 0 ? Math.round((tenantsComCashback / totalEmpresas) * 100) : 0,
   });
 
-  // Saúde por tenant — pedidos no período selecionado, último pedido de todos os tempos, último acesso ao admin.
+  // Saúde por tenant — pedidos/faturamento/ticket médio no período selecionado, último pedido de
+  // todos os tempos, último acesso ao admin.
   const ultimoPedidoMap = new Map(ultimoPedidoPorEmpresa.map((r) => [r.empresaId, r._max.createdAt]));
   const porTenant = empresas
-    .map((e) => ({
-      id: e.id,
-      nome: e.nome,
-      slug: e.slug,
-      ativo: e.empresaAtiva,
-      pedidosNoPeriodo: porEmpresaMap.get(e.id) || 0,
-      ultimoPedidoEm: ultimoPedidoMap.get(e.id) || null,
-      ultimoAcessoAdminEm: e.ultimoAcessoAdminEm,
-    }))
-    .sort((a, b) => b.pedidosNoPeriodo - a.pedidosNoPeriodo);
+    .map((e) => {
+      const pedidosNoPeriodo = porEmpresaMap.get(e.id) || 0;
+      const faturamentoNoPeriodo = faturamentoPorEmpresaMap.get(e.id) || 0;
+      return {
+        id: e.id,
+        nome: e.nome,
+        slug: e.slug,
+        ativo: e.empresaAtiva,
+        pedidosNoPeriodo,
+        faturamentoNoPeriodo,
+        ticketMedioNoPeriodo: pedidosNoPeriodo > 0 ? faturamentoNoPeriodo / pedidosNoPeriodo : 0,
+        ultimoPedidoEm: ultimoPedidoMap.get(e.id) || null,
+        ultimoAcessoAdminEm: e.ultimoAcessoAdminEm,
+      };
+    })
+    .sort((a, b) => b.faturamentoNoPeriodo - a.faturamentoNoPeriodo);
+
+  // Atividade recente — cruza direto Empresa/Pedido/TicketSuporte/LogAuditoria (não existe uma
+  // única tabela de eventos hoje), pega os 8 mais recentes de cada fonte e intercala por data.
+  const [novosTenants, pedidosRecentes, chamadosRecentes, alteracoesRecentes] = await Promise.all([
+    prisma.empresa.findMany({ where: { ehDemo: false }, orderBy: { createdAt: 'desc' }, take: 8, select: { id: true, nome: true, createdAt: true } }),
+    prisma.pedido.findMany({
+      where: { empresa: { ehDemo: false } },
+      orderBy: { createdAt: 'desc' },
+      take: 8,
+      select: { id: true, numero: true, createdAt: true, empresa: { select: { nome: true } } },
+    }),
+    prisma.ticketSuporte.findMany({
+      where: { empresa: { ehDemo: false } },
+      orderBy: { createdAt: 'desc' },
+      take: 8,
+      select: { id: true, assunto: true, createdAt: true, empresa: { select: { nome: true } } },
+    }),
+    prisma.logAuditoria.findMany({
+      where: { tipo: 'ALTERACAO_CRITICA' },
+      orderBy: { createdAt: 'desc' },
+      take: 8,
+      select: { id: true, acao: true, empresaNome: true, createdAt: true },
+    }),
+  ]);
+  const atividadeRecente = [
+    ...novosTenants.map((e) => ({ tipo: 'NOVO_TENANT', descricao: `Novo tenant cadastrado: ${e.nome}`, data: e.createdAt })),
+    ...pedidosRecentes.map((p) => ({ tipo: 'NOVO_PEDIDO', descricao: `Novo pedido #${p.numero} em ${p.empresa.nome}`, data: p.createdAt })),
+    ...chamadosRecentes.map((c) => ({ tipo: 'NOVO_CHAMADO', descricao: `Novo chamado em ${c.empresa.nome}: ${c.assunto}`, data: c.createdAt })),
+    ...alteracoesRecentes.map((a) => ({ tipo: 'ALTERACAO', descricao: a.empresaNome ? `${a.acao} (${a.empresaNome})` : a.acao, data: a.createdAt })),
+  ]
+    .sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime())
+    .slice(0, 12);
 
   res.json({
     totalEmpresas,
@@ -190,10 +276,17 @@ router.get('/dashboard', requireSuperAdmin, asyncHandler(async (req, res) => {
     ticketMedio,
     comissaoTotal,
     pedidosPorDia,
+    porFormaPagamento,
+    porCategoria,
     dispositivos,
     navegadores,
     usoFuncionalidades,
     porTenant,
+    atividadeRecente,
+    alertas: {
+      faturasPendentes,
+      tenantsInativos30Dias,
+    },
   });
 }));
 
