@@ -5,6 +5,7 @@ const cors = require('cors');
 const swaggerUi = require('swagger-ui-express');
 const swaggerSpec = require('./swagger');
 const { authenticate } = require('./lib/auth');
+const prisma = require('./lib/prisma');
 const superAdminRouter = require('./routes/superAdmin');
 const empresasRouter = require('./routes/empresas');
 const motoboysRouter = require('./routes/motoboys');
@@ -147,6 +148,26 @@ app.get('/app-version', (req, res) => {
 
 app.get('/ping', (req, res) => {
   res.json({ message: 'pong' });
+});
+
+/**
+ * @openapi
+ * /status-publico:
+ *   get:
+ *     summary: Status público da plataforma (operacional/instável) — sem autenticação, pra uma página de status pública
+ *     tags: [Status]
+ *     responses:
+ *       200:
+ *         description: Status real, calculado na hora (ping no banco de dados)
+ */
+app.get('/status-publico', async (req, res) => {
+  let operacional = true;
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+  } catch {
+    operacional = false;
+  }
+  res.json({ operacional, verificadoEm: new Date().toISOString() });
 });
 
 app.use('/super-admin', superAdminRouter);
