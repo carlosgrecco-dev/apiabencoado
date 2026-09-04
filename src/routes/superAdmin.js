@@ -3,7 +3,8 @@ const bcrypt = require('bcryptjs');
 const prisma = require('../lib/prisma');
 const { signToken, requireSuperAdmin } = require('../lib/auth');
 const { agregarDispositivos } = require('../lib/userAgentStats');
-const { gerarBackup, listarBackups, caminhoBackup } = require('../lib/backup');
+const { gerarBackup, gerarBackupTenant, listarBackups, caminhoBackup } = require('../lib/backup');
+const { registrarLog } = require('../lib/auditLog');
 
 const router = Router();
 
@@ -453,6 +454,74 @@ router.get('/saltfood-coins/contas', requireSuperAdmin, asyncHandler(async (req,
   res.json(contas);
 }));
 
+const STATUS_PEDIDO_VALIDOS = ['RECEBIDO', 'PREPARANDO', 'SAIU_ENTREGA', 'ENTREGUE', 'CANCELADO'];
+
+/**
+ * @openapi
+ * /super-admin/financeiro/transacoes:
+ *   get:
+ *     summary: Ledger platform-wide de transações (pedidos) de todas as lojas, com comissão estimada
+ *     tags: [SuperAdmin]
+ *     parameters:
+ *       - in: query
+ *         name: empresaId
+ *         schema: { type: string, format: uuid }
+ *       - in: query
+ *         name: formaPagamento
+ *         schema: { type: string, enum: [PIX, DINHEIRO, CARTAO, MULTIPLO] }
+ *       - in: query
+ *         name: status
+ *         schema: { type: string, enum: [RECEBIDO, PREPARANDO, SAIU_ENTREGA, ENTREGUE, CANCELADO] }
+ *         description: Padrão ENTREGUE (mesma convenção de GMV/comissão usada no resto da plataforma)
+ *       - in: query
+ *         name: de
+ *         schema: { type: string, format: date }
+ *       - in: query
+ *         name: ate
+ *         schema: { type: string, format: date }
+ *     responses:
+ *       200:
+ *         description: Até 200 transações mais recentes que casam com o filtro
+ */
+router.get('/financeiro/transacoes', requireSuperAdmin, asyncHandler(async (req, res) => {
+  const { empresaId, formaPagamento, status, de, ate } = req.query;
+  const range = {
+    gte: de ? new Date(`${de}T00:00:00`) : undefined,
+    lte: ate ? new Date(`${ate}T23:59:59`) : undefined,
+  };
+  const statusValido = STATUS_PEDIDO_VALIDOS.includes(status) ? status : 'ENTREGUE';
+
+  const pedidos = await prisma.pedido.findMany({
+    where: {
+      empresa: { ehDemo: false },
+      status: statusValido,
+      createdAt: range,
+      ...(empresaId ? { empresaId } : {}),
+      ...(formaPagamento ? { formaPagamento } : {}),
+    },
+    select: {
+      id: true, numero: true, total: true, formaPagamento: true, status: true, createdAt: true,
+      empresa: { select: { id: true, nome: true, slug: true, comissaoPercent: true } },
+    },
+    orderBy: { createdAt: 'desc' },
+    take: 200,
+  });
+
+  res.json(pedidos.map((p) => ({
+    id: p.id,
+    numero: p.numero,
+    total: Number(p.total),
+    formaPagamento: p.formaPagamento,
+    status: p.status,
+    createdAt: p.createdAt,
+    empresaId: p.empresa.id,
+    empresaNome: p.empresa.nome,
+    empresaSlug: p.empresa.slug,
+    comissaoPercent: Number(p.empresa.comissaoPercent),
+    valorComissaoEstimado: Math.round(Number(p.total) * (Number(p.empresa.comissaoPercent) / 100) * 100) / 100,
+  })));
+}));
+
 const STATUS_CHAMADO_VALIDOS = ['ABERTO', 'EM_ANDAMENTO', 'RESOLVIDO'];
 
 /**
@@ -626,7 +695,7 @@ router.get('/recursos-plataforma', requireSuperAdmin, asyncHandler(async (req, r
  *     tags: [SuperAdmin]
  *     responses:
  *       200:
- *         description: Sinais de saúde e histórico de backups
+ *         description: Sinais de saúde
  */
 router.get('/monitoramento', requireSuperAdmin, asyncHandler(async (req, res) => {
   const vinteQuatroHorasAtras = new Date(Date.now() - 24 * 60 * 60 * 1000);
@@ -640,22 +709,16 @@ router.get('/monitoramento', requireSuperAdmin, asyncHandler(async (req, res) =>
     bancoErro = err.message;
   }
 
-  const [errosUltimas24h, totalGateways, gatewaysAtivos, backups] = await Promise.all([
+  const [errosUltimas24h, totalGateways, gatewaysAtivos] = await Promise.all([
     prisma.logAuditoria.count({ where: { tipo: 'ERRO', createdAt: { gte: vinteQuatroHorasAtras } } }),
     prisma.gatewayPagamento.count(),
     prisma.gatewayPagamento.count({ where: { ativo: true } }),
-    Promise.resolve(listarBackups()),
   ]);
 
   res.json({
     banco: { ok: bancoOk, erro: bancoErro },
     errosUltimas24h,
     gateways: { total: totalGateways, ativos: gatewaysAtivos },
-    backups: {
-      total: backups.length,
-      ultimo: backups[0] || null,
-      lista: backups.slice(0, 20),
-    },
   });
 }));
 
@@ -682,16 +745,64 @@ router.post('/backups', requireSuperAdmin, asyncHandler(async (req, res) => {
 
 /**
  * @openapi
+ * /super-admin/backups/tenant/{empresaId}:
+ *   post:
+ *     summary: Gera um backup sob demanda só dos dados de UM tenant — snapshot lógico via Prisma (não é um dump binário do Postgres)
+ *     tags: [SuperAdmin]
+ *     parameters:
+ *       - in: path
+ *         name: empresaId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       201:
+ *         description: Backup gerado
+ *       404:
+ *         description: Empresa não encontrada
+ *       500:
+ *         description: Falha ao gerar o backup
+ */
+router.post('/backups/tenant/:empresaId', requireSuperAdmin, asyncHandler(async (req, res) => {
+  try {
+    const resultado = await gerarBackupTenant(req.params.empresaId);
+    if (!resultado) {
+      return res.status(404).json({ error: 'Empresa não encontrada' });
+    }
+    await registrarLog({
+      tipo: 'ALTERACAO_CRITICA',
+      empresaId: resultado.empresaId,
+      empresaNome: resultado.empresaNome,
+      ator: 'super-admin',
+      acao: `Backup individual gerado (${resultado.totalTabelas} tabelas)`,
+    });
+    res.status(201).json(resultado);
+  } catch (err) {
+    res.status(500).json({ error: `Não foi possível gerar o backup do tenant: ${err.message}` });
+  }
+}));
+
+/**
+ * @openapi
  * /super-admin/backups:
  *   get:
- *     summary: Lista os backups já gerados
+ *     summary: Lista os backups já gerados (plataforma inteira e por tenant)
  *     tags: [SuperAdmin]
  *     responses:
  *       200:
  *         description: Lista de backups, mais recente primeiro
  */
 router.get('/backups', requireSuperAdmin, asyncHandler(async (req, res) => {
-  res.json(listarBackups());
+  const backups = listarBackups();
+  const ids = [...new Set(backups.filter((b) => b.empresaId).map((b) => b.empresaId))];
+  const empresas = ids.length
+    ? await prisma.empresa.findMany({ where: { id: { in: ids } }, select: { id: true, nome: true } })
+    : [];
+  const nomePorId = new Map(empresas.map((e) => [e.id, e.nome]));
+
+  res.json(backups.map((b) => ({
+    ...b,
+    empresaNome: b.empresaId ? (nomePorId.get(b.empresaId) || 'Empresa removida') : null,
+  })));
 }));
 
 /**
