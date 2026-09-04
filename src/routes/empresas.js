@@ -690,7 +690,11 @@ router.post('/', requireSuperAdmin, asyncHandler(async (req, res) => {
         codigoIndicacao,
         indicadaPorEmpresaId,
         ...(plano
-          ? { planoId: plano.id, comissaoPercent: plano.comissaoPercent }
+          ? {
+              planoId: plano.id,
+              comissaoPercent: plano.comissaoPercent,
+              ...Object.fromEntries(CAMPOS_FUNCIONALIDADES.map((campo) => [campo, plano[campo]])),
+            }
           : comissaoAvulsa !== null ? { comissaoPercent: comissaoAvulsa } : {}),
       },
     });
