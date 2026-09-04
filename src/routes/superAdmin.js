@@ -719,4 +719,190 @@ router.get('/backups/:arquivo', requireSuperAdmin, asyncHandler(async (req, res)
   res.download(caminho, req.params.arquivo);
 }));
 
+const STATUS_CAMPANHA_VALIDOS = ['RASCUNHO', 'ATIVA', 'PAUSADA', 'ENCERRADA'];
+
+/**
+ * @openapi
+ * /super-admin/campanhas:
+ *   get:
+ *     summary: Lista as campanhas de marketing cadastradas (registro/acompanhamento manual, sem disparo automático)
+ *     tags: [SuperAdmin]
+ *     responses:
+ *       200:
+ *         description: Lista de campanhas, mais recente primeiro
+ */
+router.get('/campanhas', requireSuperAdmin, asyncHandler(async (req, res) => {
+  const campanhas = await prisma.campanhaMarketing.findMany({ orderBy: { createdAt: 'desc' } });
+  res.json(campanhas);
+}));
+
+/**
+ * @openapi
+ * /super-admin/campanhas:
+ *   post:
+ *     summary: Cadastra uma nova campanha de marketing
+ *     tags: [SuperAdmin]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [nome, publicoAlvo, mensagem, dataInicio]
+ *             properties:
+ *               nome: { type: string }
+ *               publicoAlvo: { type: string }
+ *               mensagem: { type: string }
+ *               dataInicio: { type: string, format: date-time }
+ *               dataFim: { type: string, format: date-time }
+ *               status: { type: string, enum: [RASCUNHO, ATIVA, PAUSADA, ENCERRADA] }
+ *     responses:
+ *       201:
+ *         description: Campanha criada
+ *       400:
+ *         description: Campos obrigatórios ausentes ou inválidos
+ */
+router.post('/campanhas', requireSuperAdmin, asyncHandler(async (req, res) => {
+  const { nome, publicoAlvo, mensagem, dataInicio, dataFim, status } = req.body;
+  if (!nome || !publicoAlvo || !mensagem || !dataInicio) {
+    return res.status(400).json({ error: 'Campos "nome", "publicoAlvo", "mensagem" e "dataInicio" são obrigatórios' });
+  }
+  if (status !== undefined && !STATUS_CAMPANHA_VALIDOS.includes(status)) {
+    return res.status(400).json({ error: `Campo "status" deve ser um de: ${STATUS_CAMPANHA_VALIDOS.join(', ')}` });
+  }
+
+  const campanha = await prisma.campanhaMarketing.create({
+    data: {
+      nome,
+      publicoAlvo,
+      mensagem,
+      dataInicio: new Date(dataInicio),
+      dataFim: dataFim ? new Date(dataFim) : null,
+      ...(status !== undefined ? { status } : {}),
+    },
+  });
+
+  res.status(201).json(campanha);
+}));
+
+/**
+ * @openapi
+ * /super-admin/campanhas/{id}:
+ *   put:
+ *     summary: Atualiza os dados de uma campanha de marketing
+ *     tags: [SuperAdmin]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               nome: { type: string }
+ *               publicoAlvo: { type: string }
+ *               mensagem: { type: string }
+ *               dataInicio: { type: string, format: date-time }
+ *               dataFim: { type: string, format: date-time }
+ *     responses:
+ *       200:
+ *         description: Campanha atualizada
+ *       404:
+ *         description: Campanha não encontrada
+ */
+router.put('/campanhas/:id', requireSuperAdmin, asyncHandler(async (req, res) => {
+  const { nome, publicoAlvo, mensagem, dataInicio, dataFim } = req.body;
+
+  const existente = await prisma.campanhaMarketing.findUnique({ where: { id: req.params.id } });
+  if (!existente) {
+    return res.status(404).json({ error: 'Campanha não encontrada' });
+  }
+
+  const campanha = await prisma.campanhaMarketing.update({
+    where: { id: req.params.id },
+    data: {
+      ...(nome !== undefined ? { nome } : {}),
+      ...(publicoAlvo !== undefined ? { publicoAlvo } : {}),
+      ...(mensagem !== undefined ? { mensagem } : {}),
+      ...(dataInicio !== undefined ? { dataInicio: new Date(dataInicio) } : {}),
+      ...(dataFim !== undefined ? { dataFim: dataFim ? new Date(dataFim) : null } : {}),
+    },
+  });
+
+  res.json(campanha);
+}));
+
+/**
+ * @openapi
+ * /super-admin/campanhas/{id}/status:
+ *   patch:
+ *     summary: Atualiza só o status de uma campanha (rascunho/ativa/pausada/encerrada)
+ *     tags: [SuperAdmin]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [status]
+ *             properties:
+ *               status: { type: string, enum: [RASCUNHO, ATIVA, PAUSADA, ENCERRADA] }
+ *     responses:
+ *       200:
+ *         description: Status atualizado
+ *       400:
+ *         description: Status inválido
+ *       404:
+ *         description: Campanha não encontrada
+ */
+router.patch('/campanhas/:id/status', requireSuperAdmin, asyncHandler(async (req, res) => {
+  const { status } = req.body;
+  if (!STATUS_CAMPANHA_VALIDOS.includes(status)) {
+    return res.status(400).json({ error: `Campo "status" deve ser um de: ${STATUS_CAMPANHA_VALIDOS.join(', ')}` });
+  }
+
+  const existente = await prisma.campanhaMarketing.findUnique({ where: { id: req.params.id } });
+  if (!existente) {
+    return res.status(404).json({ error: 'Campanha não encontrada' });
+  }
+
+  const campanha = await prisma.campanhaMarketing.update({ where: { id: req.params.id }, data: { status } });
+  res.json(campanha);
+}));
+
+/**
+ * @openapi
+ * /super-admin/campanhas/{id}:
+ *   delete:
+ *     summary: Remove uma campanha de marketing
+ *     tags: [SuperAdmin]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       204:
+ *         description: Campanha removida
+ *       404:
+ *         description: Campanha não encontrada
+ */
+router.delete('/campanhas/:id', requireSuperAdmin, asyncHandler(async (req, res) => {
+  const existente = await prisma.campanhaMarketing.findUnique({ where: { id: req.params.id } });
+  if (!existente) {
+    return res.status(404).json({ error: 'Campanha não encontrada' });
+  }
+
+  await prisma.campanhaMarketing.delete({ where: { id: req.params.id } });
+  res.status(204).send();
+}));
+
 module.exports = router;

@@ -1367,3 +1367,27 @@ model WebhookLog {
 
   @@map("webhook_logs")
 }
+
+enum StatusCampanhaMarketing {
+  RASCUNHO
+  ATIVA
+  PAUSADA
+  ENCERRADA
+}
+
+/// Registro/acompanhamento de campanhas de marketing do Super Admin (platform-wide, não por
+/// tenant). Não existe motor de disparo automático aqui — é só o cadastro e o status da campanha,
+/// sem enviar e-mail/push de verdade.
+model CampanhaMarketing {
+  id          String                  @id @default(uuid()) @db.Uuid
+  nome        String
+  publicoAlvo String                  @map("publico_alvo")
+  mensagem    String
+  dataInicio  DateTime                @map("data_inicio")
+  dataFim     DateTime?               @map("data_fim")
+  status      StatusCampanhaMarketing @default(RASCUNHO)
+  createdAt   DateTime                @default(now()) @map("created_at")
+  updatedAt   DateTime                @updatedAt @map("updated_at")
+
+  @@map("campanhas_marketing")
+}
