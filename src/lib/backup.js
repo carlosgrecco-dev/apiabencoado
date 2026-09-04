@@ -94,4 +94,12 @@ const caminhoBackup = (nomeArquivo) => {
   return fs.readdirSync(BACKUP_DIR).includes(base) ? path.join(BACKUP_DIR, base) : null;
 };
 
-module.exports = { gerarBackup, gerarBackupTenant, listarBackups, caminhoBackup };
+/** Apaga um arquivo de backup do disco. Não há política de retenção automática hoje — essa é a única forma de limpar espaço. */
+const removerBackup = (nomeArquivo) => {
+  const caminho = caminhoBackup(nomeArquivo);
+  if (!caminho) return false;
+  fs.unlinkSync(caminho);
+  return true;
+};
+
+module.exports = { gerarBackup, gerarBackupTenant, listarBackups, caminhoBackup, removerBackup };

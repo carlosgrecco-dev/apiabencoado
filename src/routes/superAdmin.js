@@ -3,7 +3,7 @@ const bcrypt = require('bcryptjs');
 const prisma = require('../lib/prisma');
 const { signToken, requireSuperAdmin } = require('../lib/auth');
 const { agregarDispositivos } = require('../lib/userAgentStats');
-const { gerarBackup, gerarBackupTenant, listarBackups, caminhoBackup } = require('../lib/backup');
+const { gerarBackup, gerarBackupTenant, listarBackups, caminhoBackup, removerBackup } = require('../lib/backup');
 const { registrarLog } = require('../lib/auditLog');
 
 const router = Router();
@@ -737,6 +737,10 @@ router.get('/monitoramento', requireSuperAdmin, asyncHandler(async (req, res) =>
 router.post('/backups', requireSuperAdmin, asyncHandler(async (req, res) => {
   try {
     const resultado = await gerarBackup();
+    await registrarLog({
+      tipo: 'ALTERACAO_CRITICA', ator: 'super-admin',
+      acao: `Backup completo da plataforma gerado (${resultado.totalTabelas} tabelas)`,
+    });
     res.status(201).json(resultado);
   } catch (err) {
     res.status(500).json({ error: `Não foi possível gerar o backup: ${err.message}` });
@@ -828,6 +832,31 @@ router.get('/backups/:arquivo', requireSuperAdmin, asyncHandler(async (req, res)
     return res.status(404).json({ error: 'Backup não encontrado' });
   }
   res.download(caminho, req.params.arquivo);
+}));
+
+/**
+ * @openapi
+ * /super-admin/backups/{arquivo}:
+ *   delete:
+ *     summary: Apaga um backup do disco (não há retenção automática hoje — essa é a única forma de liberar espaço)
+ *     tags: [SuperAdmin]
+ *     parameters:
+ *       - in: path
+ *         name: arquivo
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       204:
+ *         description: Backup removido
+ *       404:
+ *         description: Backup não encontrado
+ */
+router.delete('/backups/:arquivo', requireSuperAdmin, asyncHandler(async (req, res) => {
+  const removido = removerBackup(req.params.arquivo);
+  if (!removido) {
+    return res.status(404).json({ error: 'Backup não encontrado' });
+  }
+  res.status(204).send();
 }));
 
 const STATUS_CAMPANHA_VALIDOS = ['RASCUNHO', 'ATIVA', 'PAUSADA', 'ENCERRADA'];
