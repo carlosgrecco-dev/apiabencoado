@@ -5,6 +5,7 @@ const { signToken, requireSuperAdmin } = require('../lib/auth');
 const { agregarDispositivos } = require('../lib/userAgentStats');
 const { gerarBackup, gerarBackupTenant, listarBackups, caminhoBackup, removerBackup } = require('../lib/backup');
 const { registrarLog } = require('../lib/auditLog');
+const { loginRateLimit } = require('../lib/rateLimit');
 
 const router = Router();
 
@@ -34,7 +35,7 @@ const SUPER_ADMIN_TOKEN_TTL = '8h';
  *       401:
  *         description: Usuário ou senha inválidos
  */
-router.post('/login', asyncHandler(async (req, res) => {
+router.post('/login', loginRateLimit(), asyncHandler(async (req, res) => {
   const { usuario, senha } = req.body;
   if (!usuario || !senha) {
     return res.status(400).json({ error: 'Campos "usuario" e "senha" são obrigatórios' });

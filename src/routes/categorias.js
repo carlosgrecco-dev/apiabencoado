@@ -1,7 +1,7 @@
 const { Router } = require('express');
 const prisma = require('../lib/prisma');
 const loadEmpresa = require('../lib/loadEmpresa');
-const { requireEmpresaAdmin } = require('../lib/auth');
+const { requireEmpresaAdmin , requireGrupo } = require('../lib/auth');
 
 const router = Router({ mergeParams: true });
 
@@ -39,7 +39,7 @@ router.get('/', asyncHandler(async (req, res) => {
  *       400:
  *         description: Dados inválidos
  */
-router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.post('/', requireEmpresaAdmin(), requireGrupo('vendas'), asyncHandler(async (req, res) => {
   const { nome, ordem, ativo } = req.body;
   if (!nome) {
     return res.status(400).json({ error: 'Campo "nome" é obrigatório' });
@@ -69,7 +69,7 @@ router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
  *       404:
  *         description: Categoria não encontrada
  */
-router.put('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.put('/:id', requireEmpresaAdmin(), requireGrupo('vendas'), asyncHandler(async (req, res) => {
   const { nome, ordem, ativo } = req.body;
   if (!nome) {
     return res.status(400).json({ error: 'Campo "nome" é obrigatório' });
@@ -106,7 +106,7 @@ router.put('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
  *       404:
  *         description: Categoria não encontrada
  */
-router.delete('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.delete('/:id', requireEmpresaAdmin(), requireGrupo('vendas'), asyncHandler(async (req, res) => {
   const existente = await prisma.categoria.findFirst({
     where: { id: req.params.id, empresaId: req.params.empresaId },
   });

@@ -1,7 +1,7 @@
 const { Router } = require('express');
 const prisma = require('../lib/prisma');
 const loadEmpresa = require('../lib/loadEmpresa');
-const { requireEmpresaAdmin } = require('../lib/auth');
+const { requireEmpresaAdmin , requireGrupo } = require('../lib/auth');
 const { registrarAtividadeLoja } = require('../lib/atividadeLoja');
 
 const router = Router({ mergeParams: true });
@@ -152,7 +152,7 @@ router.get('/', asyncHandler(async (req, res) => {
  *       200:
  *         description: Produtos com vendasTotais + estatísticas agregadas
  */
-router.get('/admin-resumo', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.get('/admin-resumo', requireEmpresaAdmin(), requireGrupo('vendas'), asyncHandler(async (req, res) => {
   const produtos = await prisma.produto.findMany({
     where: { empresaId: req.params.empresaId },
     include: { categoria: true },
@@ -223,7 +223,7 @@ router.get('/admin-resumo', requireEmpresaAdmin(), asyncHandler(async (req, res)
  *       200:
  *         description: Grupos de opção de todos os produtos
  */
-router.get('/opcoes-grupos-todos', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.get('/opcoes-grupos-todos', requireEmpresaAdmin(), requireGrupo('vendas'), asyncHandler(async (req, res) => {
   const produtos = await prisma.produto.findMany({
     where: { empresaId: req.params.empresaId },
     select: {
@@ -280,7 +280,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
  *       400:
  *         description: Dados inválidos
  */
-router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.post('/', requireEmpresaAdmin(), requireGrupo('vendas'), asyncHandler(async (req, res) => {
   const {
     nome, codigo, descricao, categoriaId, preco, precoPromocional, fotoUrl, ativo, ordem,
     controlarEstoque, estoqueQtd, estoqueMinimo, ehCombo,
@@ -352,7 +352,7 @@ router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
  *       404:
  *         description: Produto não encontrado
  */
-router.put('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.put('/:id', requireEmpresaAdmin(), requireGrupo('vendas'), asyncHandler(async (req, res) => {
   const {
     nome, codigo, descricao, categoriaId, preco, precoPromocional, fotoUrl, ativo, ordem,
     controlarEstoque, estoqueQtd, estoqueMinimo, ehCombo,
@@ -431,7 +431,7 @@ router.put('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
  *       404:
  *         description: Produto não encontrado
  */
-router.patch('/:id/status', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.patch('/:id/status', requireEmpresaAdmin(), requireGrupo('vendas'), asyncHandler(async (req, res) => {
   const { ativo } = req.body;
   if (typeof ativo !== 'boolean') {
     return res.status(400).json({ error: 'Campo "ativo" é obrigatório e deve ser booleano' });
@@ -482,7 +482,7 @@ router.patch('/:id/status', requireEmpresaAdmin(), asyncHandler(async (req, res)
  *       404:
  *         description: Produto não encontrado
  */
-router.patch('/:id/esgotado', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.patch('/:id/esgotado', requireEmpresaAdmin(), requireGrupo('vendas'), asyncHandler(async (req, res) => {
   const { esgotadoHoje } = req.body;
   if (typeof esgotadoHoje !== 'boolean') {
     return res.status(400).json({ error: 'Campo "esgotadoHoje" é obrigatório e deve ser booleano' });
@@ -536,7 +536,7 @@ router.patch('/:id/esgotado', requireEmpresaAdmin(), asyncHandler(async (req, re
  *       400:
  *         description: Payload inválido ou algum produto não pertence a esta empresa
  */
-router.patch('/reordenar', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.patch('/reordenar', requireEmpresaAdmin(), requireGrupo('vendas'), asyncHandler(async (req, res) => {
   const { itens } = req.body;
   if (!Array.isArray(itens) || itens.length === 0 || itens.some((i) => !i || typeof i.id !== 'string' || typeof i.ordem !== 'number')) {
     return res.status(400).json({ error: 'Campo "itens" é obrigatório e deve ser uma lista de { id, ordem }' });
@@ -581,7 +581,7 @@ router.patch('/reordenar', requireEmpresaAdmin(), asyncHandler(async (req, res) 
  *       404:
  *         description: Produto não encontrado
  */
-router.delete('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.delete('/:id', requireEmpresaAdmin(), requireGrupo('vendas'), asyncHandler(async (req, res) => {
   const existente = await prisma.produto.findFirst({
     where: { id: req.params.id, empresaId: req.params.empresaId },
   });

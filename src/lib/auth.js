@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const prisma = require('./prisma');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
@@ -12,8 +13,15 @@ const signToken = (payload, expiresIn) => jwt.sign(payload, JWT_SECRET, { expire
  * Montado uma vez, globalmente, logo após express.json(). Nunca rejeita a requisição — só
  * popula req.auth com o payload do token (se houver um válido) ou null. A decisão de exigir
  * autenticação fica com os middlewares requireX, aplicados rota a rota.
+ *
+ * Motoboy é o único ator cujo token (30 dias) sobrevive muito além do tempo em que a loja pode
+ * querer cortar o acesso dele (demissão etc.) — por isso, só para esse role, confere `ativo` no
+ * banco a cada requisição e invalida a sessão localmente (req.auth = null) se ele foi desativado,
+ * mesmo com um token ainda válido. Isso cobre de uma vez só todo lugar do código que confia num
+ * token MOTOBOY (não só requireMotoboy — pedidos.js e movimentosCaixa.js também checam o role
+ * inline), sem precisar caçar cada checagem espalhada.
  */
-const authenticate = (req, res, next) => {
+const authenticate = async (req, res, next) => {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
   if (!token) {
@@ -21,7 +29,15 @@ const authenticate = (req, res, next) => {
     return next();
   }
   try {
-    req.auth = jwt.verify(token, JWT_SECRET);
+    const payload = jwt.verify(token, JWT_SECRET);
+    if (payload.role === 'MOTOBOY') {
+      const motoboy = await prisma.motoboy.findUnique({ where: { id: payload.motoboyId }, select: { ativo: true } });
+      if (!motoboy || !motoboy.ativo) {
+        req.auth = null;
+        return next();
+      }
+    }
+    req.auth = payload;
   } catch {
     req.auth = null;
   }
@@ -90,6 +106,37 @@ const requireSuperAdmin = (req, res, next) => {
   next();
 };
 
+/**
+ * Espelha GRUPOS_POR_PAPEL de front/src/components/admin/TenantAdminNav.tsx — os mesmos grupos de
+ * menu que cada papel de usuário de equipe enxerga na UI, agora também aplicados no backend. Login
+ * master (sem papel) nunca é afetado por isso. Manter os dois arquivos em sincronia se um papel
+ * ganhar/perder acesso a um grupo.
+ */
+const GRUPOS_POR_PAPEL = {
+  GERENTE: ['painel', 'vendas', 'delivery', 'clientes', 'financeiro', 'desempenho', 'operacional'],
+  OPERADOR_CAIXA: ['painel', 'operacional', 'financeiro'],
+  ATENDENTE: ['painel', 'vendas', 'delivery'],
+};
+
+/**
+ * Restringe uma rota a um ou mais grupos — só tem efeito sobre um login secundário de equipe
+ * (token EMPRESA_ADMIN com `papel` definido); login master, Cliente, Motoboy e Super Admin passam
+ * direto (a decisão de exigir aquele role continua com requireEmpresaAdmin/requireCliente/etc.,
+ * aplicado depois na cadeia). Use no mount do router (server.js) quando o recurso inteiro pertence
+ * a um grupo só; para arquivos com rotas de grupos diferentes misturadas, aplique rota a rota.
+ */
+const requireGrupo = (...gruposPermitidos) => (req, res, next) => {
+  if (req.auth?.role !== 'EMPRESA_ADMIN' || !req.auth.papel) {
+    return next();
+  }
+  const gruposDoPapel = GRUPOS_POR_PAPEL[req.auth.papel] || [];
+  const liberado = gruposPermitidos.some((g) => gruposDoPapel.includes(g));
+  if (!liberado) {
+    return res.status(403).json({ error: 'Seu perfil de acesso não permite usar esta função.' });
+  }
+  next();
+};
+
 module.exports = {
   signToken,
   authenticate,
@@ -97,4 +144,5 @@ module.exports = {
   requireCliente,
   requireMotoboy,
   requireSuperAdmin,
+  requireGrupo,
 };

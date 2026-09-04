@@ -1,7 +1,7 @@
 const { Router } = require('express');
 const prisma = require('../lib/prisma');
 const loadEmpresa = require('../lib/loadEmpresa');
-const { requireEmpresaAdmin, requireCliente } = require('../lib/auth');
+const { requireEmpresaAdmin, requireCliente, requireGrupo } = require('../lib/auth');
 const { criarNotificacaoCliente } = require('../lib/notificacoesCliente');
 
 const router = Router({ mergeParams: true });
@@ -9,6 +9,8 @@ const router = Router({ mergeParams: true });
 const asyncHandler = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 router.use(loadEmpresa);
+// Só afeta token EMPRESA_ADMIN com papel (login secundário) — Cliente passa direto, nunca é bloqueado aqui.
+router.use(requireGrupo('sistema'));
 
 const STATUS_VALIDOS = ['ABERTO', 'EM_ANDAMENTO', 'RESOLVIDO'];
 const PRIORIDADE_CHAMADO_VALIDOS = ['RELEVANTE', 'PRIORITARIA', 'URGENTE'];

@@ -1,7 +1,7 @@
 const { Router } = require('express');
 const prisma = require('../lib/prisma');
 const loadEmpresa = require('../lib/loadEmpresa');
-const { requireEmpresaAdmin } = require('../lib/auth');
+const { requireEmpresaAdmin , requireGrupo } = require('../lib/auth');
 
 const router = Router({ mergeParams: true });
 
@@ -99,7 +99,7 @@ async function calcularResumo(sessao) {
  *       400:
  *         description: Já existe um caixa aberto
  */
-router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.post('/', requireEmpresaAdmin(), requireGrupo('operacional'), asyncHandler(async (req, res) => {
   const { operadorId, operadorNome, fundoTroco } = req.body;
 
   const aberta = await prisma.caixaSessao.findFirst({
@@ -155,7 +155,7 @@ router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
  *       200:
  *         description: Sessão aberta (ou null)
  */
-router.get('/aberta', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.get('/aberta', requireEmpresaAdmin(), requireGrupo('operacional'), asyncHandler(async (req, res) => {
   const sessao = await prisma.caixaSessao.findFirst({
     where: { empresaId: req.params.empresaId, status: 'ABERTO' },
   });
@@ -186,7 +186,7 @@ router.get('/aberta', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
  *       200:
  *         description: Lista de sessões
  */
-router.get('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.get('/', requireEmpresaAdmin(), requireGrupo('operacional'), asyncHandler(async (req, res) => {
   const { status, de, ate } = req.query;
   if (status && !['ABERTO', 'FECHADO'].includes(status)) {
     return res.status(400).json({ error: 'Campo "status" deve ser um de: ABERTO, FECHADO' });
@@ -232,7 +232,7 @@ router.get('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
  *       404:
  *         description: Sessão não encontrada
  */
-router.get('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.get('/:id', requireEmpresaAdmin(), requireGrupo('operacional'), asyncHandler(async (req, res) => {
   const sessao = await prisma.caixaSessao.findFirst({
     where: { id: req.params.id, empresaId: req.params.empresaId },
     include: { movimentos: { orderBy: { createdAt: 'asc' } } },
@@ -264,7 +264,7 @@ router.get('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
  *       404:
  *         description: Sessão não encontrada
  */
-router.get('/:id/resumo', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.get('/:id/resumo', requireEmpresaAdmin(), requireGrupo('operacional'), asyncHandler(async (req, res) => {
   const sessao = await prisma.caixaSessao.findFirst({
     where: { id: req.params.id, empresaId: req.params.empresaId },
   });
@@ -308,7 +308,7 @@ router.get('/:id/resumo', requireEmpresaAdmin(), asyncHandler(async (req, res) =
  *       404:
  *         description: Sessão não encontrada
  */
-router.post('/:id/fechar', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.post('/:id/fechar', requireEmpresaAdmin(), requireGrupo('operacional'), asyncHandler(async (req, res) => {
   const { valorContado, observacoesFechamento } = req.body;
   if (typeof valorContado !== 'number' || valorContado < 0) {
     return res.status(400).json({ error: 'Campo "valorContado" é obrigatório e deve ser um número maior ou igual a zero' });

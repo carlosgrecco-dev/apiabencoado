@@ -2,7 +2,7 @@ const { Router } = require('express');
 const prisma = require('../lib/prisma');
 const loadEmpresa = require('../lib/loadEmpresa');
 const validarCupom = require('../lib/validarCupom');
-const { requireEmpresaAdmin } = require('../lib/auth');
+const { requireEmpresaAdmin , requireGrupo } = require('../lib/auth');
 
 const router = Router({ mergeParams: true });
 
@@ -142,7 +142,7 @@ router.get('/', asyncHandler(async (req, res) => {
  *       409:
  *         description: Código já cadastrado
  */
-router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.post('/', requireEmpresaAdmin(), requireGrupo('vendas'), asyncHandler(async (req, res) => {
   const {
     codigo, descricao, tipo, valor, apenasPrimeiraCompra, valorMinimoPedido, usoMaximo, validoDe, validoAte, ativo, clienteAlvoId,
     bairrosRestritos, formaPagamentoRestrita, diaSemanaRestrito, apenasClientesFieis,
@@ -214,7 +214,7 @@ router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
  *       404:
  *         description: Cupom não encontrado
  */
-router.put('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.put('/:id', requireEmpresaAdmin(), requireGrupo('vendas'), asyncHandler(async (req, res) => {
   const {
     codigo, descricao, tipo, valor, apenasPrimeiraCompra, valorMinimoPedido, usoMaximo, validoDe, validoAte, ativo, clienteAlvoId,
     bairrosRestritos, formaPagamentoRestrita, diaSemanaRestrito, apenasClientesFieis,
@@ -294,7 +294,7 @@ router.put('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
  *       404:
  *         description: Cupom não encontrado
  */
-router.patch('/:id/status', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.patch('/:id/status', requireEmpresaAdmin(), requireGrupo('vendas'), asyncHandler(async (req, res) => {
   const { ativo } = req.body;
   if (typeof ativo !== 'boolean') {
     return res.status(400).json({ error: 'Campo "ativo" é obrigatório e deve ser booleano' });
@@ -328,7 +328,7 @@ router.patch('/:id/status', requireEmpresaAdmin(), asyncHandler(async (req, res)
  *       404:
  *         description: Cupom não encontrado
  */
-router.delete('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.delete('/:id', requireEmpresaAdmin(), requireGrupo('vendas'), asyncHandler(async (req, res) => {
   const existente = await prisma.cupom.findFirst({ where: { id: req.params.id, empresaId: req.params.empresaId } });
   if (!existente) {
     return res.status(404).json({ error: 'Cupom não encontrado' });
@@ -408,7 +408,7 @@ router.post('/validar', asyncHandler(async (req, res) => {
  *       200:
  *         description: Cupons + estatísticas agregadas
  */
-router.get('/admin-resumo', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.get('/admin-resumo', requireEmpresaAdmin(), requireGrupo('vendas'), asyncHandler(async (req, res) => {
   const cupons = await prisma.cupom.findMany({ where: { empresaId: req.params.empresaId }, orderBy: { createdAt: 'desc' } });
 
   const agora = new Date();

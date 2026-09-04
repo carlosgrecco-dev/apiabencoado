@@ -1,7 +1,7 @@
 const { Router } = require('express');
 const prisma = require('../lib/prisma');
 const loadEmpresa = require('../lib/loadEmpresa');
-const { requireEmpresaAdmin } = require('../lib/auth');
+const { requireEmpresaAdmin, requireGrupo } = require('../lib/auth');
 
 const router = Router({ mergeParams: true });
 
@@ -82,7 +82,7 @@ const requireLeituraCaixa = (req, res, next) => {
  *       200:
  *         description: Lista de movimentos
  */
-router.get('/', requireLeituraCaixa, asyncHandler(async (req, res) => {
+router.get('/', requireLeituraCaixa, requireGrupo('operacional', 'financeiro'), asyncHandler(async (req, res) => {
   const { tipo, de, ate } = req.query;
   const motoboyId = req.auth.role === 'MOTOBOY' ? req.auth.motoboyId : req.query.motoboyId;
 
@@ -133,7 +133,7 @@ router.get('/', requireLeituraCaixa, asyncHandler(async (req, res) => {
  *       404:
  *         description: Movimento não encontrado
  */
-router.get('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.get('/:id', requireEmpresaAdmin(), requireGrupo('operacional', 'financeiro'), asyncHandler(async (req, res) => {
   const movimento = await prisma.movimentoCaixa.findFirst({
     where: { id: req.params.id, empresaId: req.params.empresaId },
   });
@@ -168,7 +168,7 @@ router.get('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
  *       400:
  *         description: Dados inválidos
  */
-router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.post('/', requireEmpresaAdmin(), requireGrupo('operacional', 'financeiro'), asyncHandler(async (req, res) => {
   const { tipo, descricao, valor, motoboyId, dataMovimento, categoria } = req.body;
 
   if (!tipo || !TIPOS_VALIDOS.includes(tipo)) {
@@ -234,7 +234,7 @@ router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
  *       404:
  *         description: Movimento não encontrado
  */
-router.delete('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.delete('/:id', requireEmpresaAdmin(), requireGrupo('operacional', 'financeiro'), asyncHandler(async (req, res) => {
   const existente = await prisma.movimentoCaixa.findFirst({
     where: { id: req.params.id, empresaId: req.params.empresaId },
   });

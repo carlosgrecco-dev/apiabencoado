@@ -4,6 +4,7 @@ const prisma = require('../lib/prisma');
 const loadEmpresa = require('../lib/loadEmpresa');
 const { signToken, requireEmpresaAdmin } = require('../lib/auth');
 const { registrarAtividadeLoja } = require('../lib/atividadeLoja');
+const { loginRateLimit } = require('../lib/rateLimit');
 
 const router = Router({ mergeParams: true });
 
@@ -60,7 +61,7 @@ const requireLoginMaster = (req, res, next) => {
  *       401:
  *         description: E-mail ou senha inválidos, ou usuário desativado
  */
-router.post('/login', asyncHandler(async (req, res) => {
+router.post('/login', loginRateLimit(), asyncHandler(async (req, res) => {
   const { senha } = req.body;
   const email = (req.body.email || '').trim().toLowerCase();
   if (!email || !senha) {

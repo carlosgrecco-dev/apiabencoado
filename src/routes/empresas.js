@@ -4,10 +4,11 @@ const prisma = require('../lib/prisma');
 const { calcularStatusLoja } = require('../lib/statusLoja');
 const { registrarLog } = require('../lib/auditLog');
 const { registrarAtividadeLoja } = require('../lib/atividadeLoja');
-const { signToken, requireSuperAdmin, requireEmpresaAdmin } = require('../lib/auth');
+const { signToken, requireSuperAdmin, requireEmpresaAdmin, requireGrupo } = require('../lib/auth');
 const { gerarCodigoIndicacaoEmpresaUnico } = require('../lib/indicacaoEmpresa');
 const { gerarIconePwa, TAMANHOS_VALIDOS } = require('../lib/pwaIcon');
 const { CAMPOS_FUNCIONALIDADES } = require('../lib/funcionalidades');
+const { loginRateLimit } = require('../lib/rateLimit');
 
 const ADMIN_TOKEN_TTL = '12h';
 
@@ -979,7 +980,7 @@ router.delete('/:id', requireSuperAdmin, asyncHandler(async (req, res) => {
  *       401:
  *         description: Usuário ou senha inválidos, ou acesso desativado
  */
-router.post('/:id/admin-login', asyncHandler(async (req, res) => {
+router.post('/:id/admin-login', loginRateLimit(), asyncHandler(async (req, res) => {
   const { senha } = req.body;
   const usuario = trim(req.body.usuario);
   if (!usuario || !senha) {
@@ -1035,7 +1036,7 @@ router.post('/:id/admin-login', asyncHandler(async (req, res) => {
  *       401:
  *         description: Usuário ou senha inválidos, ou acesso desativado
  */
-router.post('/admin-login', asyncHandler(async (req, res) => {
+router.post('/admin-login', loginRateLimit(), asyncHandler(async (req, res) => {
   const { senha } = req.body;
   const usuario = trim(req.body.usuario);
   if (!usuario || !senha) {
@@ -1424,7 +1425,7 @@ router.put('/:id/operacional', requireEmpresaAdmin('id'), asyncHandler(async (re
  *       404:
  *         description: Empresa não encontrada
  */
-router.put('/:id/pdv-config', requireEmpresaAdmin('id'), asyncHandler(async (req, res) => {
+router.put('/:id/pdv-config', requireEmpresaAdmin('id'), requireGrupo('operacional'), asyncHandler(async (req, res) => {
   const { pdvMesaAbertaContinua, pdvPermiteSplitPagamento } = req.body;
 
   if (pdvMesaAbertaContinua !== undefined && typeof pdvMesaAbertaContinua !== 'boolean') {
@@ -1477,7 +1478,7 @@ router.put('/:id/pdv-config', requireEmpresaAdmin('id'), asyncHandler(async (req
  *       404:
  *         description: Empresa não encontrada
  */
-router.put('/:id/formas-pagamento', requireEmpresaAdmin('id'), asyncHandler(async (req, res) => {
+router.put('/:id/formas-pagamento', requireEmpresaAdmin('id'), requireGrupo('vendas'), asyncHandler(async (req, res) => {
   const { aceitaPix, aceitaDinheiro, aceitaCartao } = req.body;
 
   for (const [campo, valor] of Object.entries({ aceitaPix, aceitaDinheiro, aceitaCartao })) {
@@ -1541,7 +1542,7 @@ router.put('/:id/formas-pagamento', requireEmpresaAdmin('id'), asyncHandler(asyn
  *       404:
  *         description: Empresa não encontrada
  */
-router.put('/:id/impressora-config', requireEmpresaAdmin('id'), asyncHandler(async (req, res) => {
+router.put('/:id/impressora-config', requireEmpresaAdmin('id'), requireGrupo('operacional'), asyncHandler(async (req, res) => {
   const { nome, macAddress } = req.body;
 
   if (nome !== undefined && nome !== null && typeof nome !== 'string') {
@@ -1591,7 +1592,7 @@ router.put('/:id/impressora-config', requireEmpresaAdmin('id'), asyncHandler(asy
  *       400:
  *         description: Dados inválidos
  */
-router.patch('/:id/dados-contato', requireEmpresaAdmin('id'), asyncHandler(async (req, res) => {
+router.patch('/:id/dados-contato', requireEmpresaAdmin('id'), requireGrupo('sistema'), asyncHandler(async (req, res) => {
   const { responsavelNome, email, telefone } = req.body;
   const data = {};
   if (responsavelNome !== undefined) {
@@ -1640,7 +1641,7 @@ router.patch('/:id/dados-contato', requireEmpresaAdmin('id'), asyncHandler(async
  *       404:
  *         description: Empresa não encontrada
  */
-router.put('/:id/frete-config', requireEmpresaAdmin('id'), asyncHandler(async (req, res) => {
+router.put('/:id/frete-config', requireEmpresaAdmin('id'), requireGrupo('delivery'), asyncHandler(async (req, res) => {
   const { freteGratisAcimaDe } = req.body;
 
   if (freteGratisAcimaDe !== undefined && freteGratisAcimaDe !== null && (Number.isNaN(Number(freteGratisAcimaDe)) || Number(freteGratisAcimaDe) < 0)) {
@@ -1700,7 +1701,7 @@ router.put('/:id/frete-config', requireEmpresaAdmin('id'), asyncHandler(async (r
  *       404:
  *         description: Empresa não encontrada
  */
-router.put('/:id/fidelidade-config', requireEmpresaAdmin('id'), asyncHandler(async (req, res) => {
+router.put('/:id/fidelidade-config', requireEmpresaAdmin('id'), requireGrupo('clientes'), asyncHandler(async (req, res) => {
   const {
     fidelidadeMetodo, fidelidadeAtiva, fidelidadeNomePrograma, fidelidadeLogoUrl, fidelidadeValidadeDias,
     fidelidadeAvisoFaltam, fidelidadeNomeItem, fidelidadeTermos, fidelidadeLimitePrata, fidelidadeLimiteOuro,
@@ -1908,7 +1909,7 @@ const HEX_COLOR_REGEX = /^#[0-9a-fA-F]{6}$/;
  *       404:
  *         description: Empresa não encontrada
  */
-router.put('/:id/aparencia', requireEmpresaAdmin('id'), asyncHandler(async (req, res) => {
+router.put('/:id/aparencia', requireEmpresaAdmin('id'), requireGrupo('sistema'), asyncHandler(async (req, res) => {
   const {
     corPrimaria, corSecundaria, logoUrl, faviconUrl,
     heroUsarCarrossel, heroTitulo, heroSubtitulo, heroBadgeLabel, heroImagemUrl, heroLinkUrl,

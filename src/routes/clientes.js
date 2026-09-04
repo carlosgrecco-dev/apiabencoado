@@ -7,6 +7,7 @@ const { gerarCodigoIndicacaoUnico } = require('../lib/indicacao');
 const { signToken, requireEmpresaAdmin, requireCliente } = require('../lib/auth');
 const { criarContaIsolada, buscarContaPorEmail, confirmarVinculo } = require('../lib/contaPlataforma');
 const { calcularRfm, RFM_SEGMENT_LABELS } = require('../lib/rfm');
+const { loginRateLimit } = require('../lib/rateLimit');
 
 const router = Router({ mergeParams: true });
 
@@ -206,7 +207,7 @@ router.post('/cadastro-rapido', requireEmpresaAdmin(), asyncHandler(async (req, 
  *       401:
  *         description: E-mail ou senha inválidos
  */
-router.post('/login', asyncHandler(async (req, res) => {
+router.post('/login', loginRateLimit(), asyncHandler(async (req, res) => {
   const { email, senha } = req.body;
   if (!email || !senha) {
     return res.status(400).json({ error: 'Campos "email" e "senha" são obrigatórios' });

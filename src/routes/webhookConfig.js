@@ -2,7 +2,7 @@ const { Router } = require('express');
 const crypto = require('crypto');
 const prisma = require('../lib/prisma');
 const loadEmpresa = require('../lib/loadEmpresa');
-const { requireEmpresaAdmin } = require('../lib/auth');
+const { requireEmpresaAdmin, requireGrupo } = require('../lib/auth');
 const { EVENTOS_WEBHOOK } = require('../lib/webhookEventos');
 
 const router = Router({ mergeParams: true });
@@ -11,6 +11,7 @@ const asyncHandler = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 router.use(loadEmpresa);
 router.use(requireEmpresaAdmin());
+router.use(requireGrupo('sistema'));
 
 const gerarSecret = () => crypto.randomBytes(24).toString('hex');
 

@@ -2,7 +2,8 @@ const { Router } = require('express');
 const bcrypt = require('bcryptjs');
 const prisma = require('../lib/prisma');
 const loadEmpresa = require('../lib/loadEmpresa');
-const { signToken, requireEmpresaAdmin, requireMotoboy } = require('../lib/auth');
+const { signToken, requireEmpresaAdmin, requireMotoboy , requireGrupo } = require('../lib/auth');
+const { loginRateLimit } = require('../lib/rateLimit');
 
 const router = Router({ mergeParams: true });
 
@@ -81,7 +82,7 @@ const handlePrismaError = (error, res) => {
  *       401:
  *         description: Telefone ou PIN inválidos
  */
-router.post('/login', asyncHandler(async (req, res) => {
+router.post('/login', loginRateLimit(), asyncHandler(async (req, res) => {
   const { telefone, pin } = req.body;
   if (!telefone || !pin) {
     return res.status(400).json({ error: 'Campos "telefone" e "pin" são obrigatórios' });
@@ -125,7 +126,7 @@ router.post('/login', asyncHandler(async (req, res) => {
  *       200:
  *         description: Lista de motoboys
  */
-router.get('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.get('/', requireEmpresaAdmin(), requireGrupo('delivery'), asyncHandler(async (req, res) => {
   const { ativo } = req.query;
   const where = {
     empresaId: req.params.empresaId,
@@ -172,7 +173,7 @@ router.get('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
  *       200:
  *         description: Motoboys + estatísticas agregadas
  */
-router.get('/admin-resumo', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.get('/admin-resumo', requireEmpresaAdmin(), requireGrupo('delivery'), asyncHandler(async (req, res) => {
   const motoboys = await prisma.motoboy.findMany({ where: { empresaId: req.params.empresaId }, orderBy: { nome: 'asc' } });
 
   const emEntregaRaw = await prisma.pedido.groupBy({
@@ -285,7 +286,7 @@ router.get('/admin-resumo', requireEmpresaAdmin(), asyncHandler(async (req, res)
  *       200:
  *         description: Linhas de pagamento (pendente/pago) + estatísticas agregadas
  */
-router.get('/pagamentos-resumo', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.get('/pagamentos-resumo', requireEmpresaAdmin(), requireGrupo('delivery'), asyncHandler(async (req, res) => {
   const { de, ate } = req.query;
   const motoboys = await prisma.motoboy.findMany({ where: { empresaId: req.params.empresaId } });
 
@@ -388,7 +389,7 @@ router.get('/pagamentos-resumo', requireEmpresaAdmin(), asyncHandler(async (req,
   });
 }));
 
-router.get('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.get('/:id', requireEmpresaAdmin(), requireGrupo('delivery'), asyncHandler(async (req, res) => {
   const motoboy = await prisma.motoboy.findFirst({
     where: { id: req.params.id, empresaId: req.params.empresaId },
   });
@@ -423,7 +424,7 @@ router.get('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
  *       400:
  *         description: Dados inválidos
  */
-router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.post('/', requireEmpresaAdmin(), requireGrupo('delivery'), asyncHandler(async (req, res) => {
   const {
     nome, telefone, taxaPadrao, ativo, veiculoTipo, veiculoPlaca, turno,
     fotoPerfilUrl, cnhUrl, documentoVeiculoUrl, seguroUrl, comprovanteResidenciaUrl,
@@ -481,7 +482,7 @@ router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
  *       404:
  *         description: Motoboy não encontrado
  */
-router.put('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.put('/:id', requireEmpresaAdmin(), requireGrupo('delivery'), asyncHandler(async (req, res) => {
   const {
     nome, telefone, taxaPadrao, ativo, veiculoTipo, veiculoPlaca, turno,
     fotoPerfilUrl, cnhUrl, documentoVeiculoUrl, seguroUrl, comprovanteResidenciaUrl,
@@ -553,7 +554,7 @@ router.put('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
  *       404:
  *         description: Motoboy não encontrado
  */
-router.patch('/:id/status', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.patch('/:id/status', requireEmpresaAdmin(), requireGrupo('delivery'), asyncHandler(async (req, res) => {
   const { ativo } = req.body;
   if (typeof ativo !== 'boolean') {
     return res.status(400).json({ error: 'Campo "ativo" é obrigatório e deve ser booleano' });
@@ -601,7 +602,7 @@ router.patch('/:id/status', requireEmpresaAdmin(), asyncHandler(async (req, res)
  *       404:
  *         description: Motoboy não encontrado
  */
-router.post('/:id/pin', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.post('/:id/pin', requireEmpresaAdmin(), requireGrupo('delivery'), asyncHandler(async (req, res) => {
   const { pin } = req.body;
   if (!pin || String(pin).length < 4) {
     return res.status(400).json({ error: 'Campo "pin" é obrigatório e deve ter ao menos 4 dígitos' });
@@ -752,7 +753,7 @@ router.patch('/:id/disponibilidade', requireMotoboy('id'), asyncHandler(async (r
  *       404:
  *         description: Motoboy não encontrado
  */
-router.delete('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.delete('/:id', requireEmpresaAdmin(), requireGrupo('delivery'), asyncHandler(async (req, res) => {
   const existente = await prisma.motoboy.findFirst({
     where: { id: req.params.id, empresaId: req.params.empresaId },
   });

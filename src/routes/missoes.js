@@ -1,7 +1,7 @@
 const { Router } = require('express');
 const prisma = require('../lib/prisma');
 const loadEmpresa = require('../lib/loadEmpresa');
-const { requireEmpresaAdmin, requireCliente } = require('../lib/auth');
+const { requireEmpresaAdmin, requireCliente , requireGrupo } = require('../lib/auth');
 
 const router = Router({ mergeParams: true });
 
@@ -91,7 +91,7 @@ router.get('/', asyncHandler(async (req, res) => {
  *       201:
  *         description: Missão criada
  */
-router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.post('/', requireEmpresaAdmin(), requireGrupo('clientes'), asyncHandler(async (req, res) => {
   const { titulo, descricao, metaPedidos, periodoDias, recompensaUnidades, ativo } = req.body;
   const erros = validarPayload(req.body);
   if (erros.length) return res.status(400).json({ error: erros.join('; ') });
@@ -129,7 +129,7 @@ router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
  *       200:
  *         description: Missão atualizada
  */
-router.put('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.put('/:id', requireEmpresaAdmin(), requireGrupo('clientes'), asyncHandler(async (req, res) => {
   const { titulo, descricao, metaPedidos, periodoDias, recompensaUnidades, ativo } = req.body;
   const erros = validarPayload(req.body);
   if (erros.length) return res.status(400).json({ error: erros.join('; ') });
@@ -174,7 +174,7 @@ router.put('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
  *       200:
  *         description: Status atualizado
  */
-router.patch('/:id/status', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.patch('/:id/status', requireEmpresaAdmin(), requireGrupo('clientes'), asyncHandler(async (req, res) => {
   const { ativo } = req.body;
   if (typeof ativo !== 'boolean') return res.status(400).json({ error: 'Campo "ativo" é obrigatório e deve ser booleano' });
 
@@ -204,7 +204,7 @@ router.patch('/:id/status', requireEmpresaAdmin(), asyncHandler(async (req, res)
  *       204:
  *         description: Missão removida
  */
-router.delete('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.delete('/:id', requireEmpresaAdmin(), requireGrupo('clientes'), asyncHandler(async (req, res) => {
   const existente = await prisma.missao.findFirst({ where: { id: req.params.id, empresaId: req.params.empresaId } });
   if (!existente) return res.status(404).json({ error: 'Missão não encontrada' });
   await prisma.missao.delete({ where: { id: req.params.id } });

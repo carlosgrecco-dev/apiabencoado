@@ -4,7 +4,7 @@ const express = require('express');
 const cors = require('cors');
 const swaggerUi = require('swagger-ui-express');
 const swaggerSpec = require('./swagger');
-const { authenticate } = require('./lib/auth');
+const { authenticate, requireGrupo } = require('./lib/auth');
 const prisma = require('./lib/prisma');
 const superAdminRouter = require('./routes/superAdmin');
 const empresasRouter = require('./routes/empresas');
@@ -53,8 +53,22 @@ const { registrarLog } = require('./lib/auditLog');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Libera o site principal, qualquer subdomínio de loja (tenant.saltfood.com.br) e localhost (dev).
+// Sem header Origin (apps nativos como o Flutter, curl, chamada servidor-a-servidor) sempre passa —
+// CORS é uma checagem que só o navegador aplica, não serve pra bloquear cliente não-browser.
+const ORIGENS_EXATAS = ['https://saltfood.com.br', 'https://www.saltfood.com.br'];
+const corsOptions = {
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+    if (ORIGENS_EXATAS.includes(origin)) return callback(null, true);
+    if (/^https:\/\/[a-z0-9-]+\.saltfood\.com\.br$/i.test(origin)) return callback(null, true);
+    if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return callback(null, true);
+    return callback(new Error('Não permitido pelo CORS'));
+  },
+};
+
 app.set('trust proxy', true);
-app.use(cors());
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use(authenticate);
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
@@ -66,8 +80,12 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
-app.get('/docs.json', (req, res) => res.json(swaggerSpec));
+// Documentação fica fora do ar em produção (NODE_ENV=production) — mapa completo da API só é
+// útil em desenvolvimento, e facilita reconhecimento pra quem tentar forçar login em produção.
+if (process.env.NODE_ENV !== 'production') {
+  app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+  app.get('/docs.json', (req, res) => res.json(swaggerSpec));
+}
 
 /**
  * @openapi

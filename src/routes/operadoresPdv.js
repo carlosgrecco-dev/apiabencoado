@@ -2,7 +2,7 @@ const { Router } = require('express');
 const bcrypt = require('bcryptjs');
 const prisma = require('../lib/prisma');
 const loadEmpresa = require('../lib/loadEmpresa');
-const { requireEmpresaAdmin } = require('../lib/auth');
+const { requireEmpresaAdmin , requireGrupo } = require('../lib/auth');
 
 const router = Router({ mergeParams: true });
 
@@ -61,7 +61,7 @@ const serializeOperador = (operador) => {
  *       200:
  *         description: Lista de operadores
  */
-router.get('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.get('/', requireEmpresaAdmin(), requireGrupo('operacional'), asyncHandler(async (req, res) => {
   const { ativo } = req.query;
   const operadores = await prisma.operadorPdv.findMany({
     where: {
@@ -96,7 +96,7 @@ router.get('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
  *       400:
  *         description: Dados inválidos
  */
-router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.post('/', requireEmpresaAdmin(), requireGrupo('operacional'), asyncHandler(async (req, res) => {
   const { nome, ativo } = req.body;
   if (!nome) {
     return res.status(400).json({ error: 'Campo "nome" é obrigatório' });
@@ -140,7 +140,7 @@ router.post('/', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
  *       404:
  *         description: Operador não encontrado
  */
-router.patch('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.patch('/:id', requireEmpresaAdmin(), requireGrupo('operacional'), asyncHandler(async (req, res) => {
   const { nome, ativo } = req.body;
 
   const existente = await prisma.operadorPdv.findFirst({
@@ -191,7 +191,7 @@ router.patch('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
  *       404:
  *         description: Operador não encontrado
  */
-router.post('/:id/pin', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.post('/:id/pin', requireEmpresaAdmin(), requireGrupo('operacional'), asyncHandler(async (req, res) => {
   const { pin } = req.body;
   if (!pin || String(pin).length < 4) {
     return res.status(400).json({ error: 'Campo "pin" é obrigatório e deve ter ao menos 4 dígitos' });
@@ -240,7 +240,7 @@ router.post('/:id/pin', requireEmpresaAdmin(), asyncHandler(async (req, res) => 
  *       401:
  *         description: PIN incorreto
  */
-router.post('/verificar-pin', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.post('/verificar-pin', requireEmpresaAdmin(), requireGrupo('operacional'), asyncHandler(async (req, res) => {
   const { operadorId, pin } = req.body;
   if (!operadorId || !pin) {
     return res.status(400).json({ error: 'Campos "operadorId" e "pin" são obrigatórios' });
@@ -282,7 +282,7 @@ router.post('/verificar-pin', requireEmpresaAdmin(), asyncHandler(async (req, re
  *       404:
  *         description: Operador não encontrado
  */
-router.delete('/:id', requireEmpresaAdmin(), asyncHandler(async (req, res) => {
+router.delete('/:id', requireEmpresaAdmin(), requireGrupo('operacional'), asyncHandler(async (req, res) => {
   const existente = await prisma.operadorPdv.findFirst({
     where: { id: req.params.id, empresaId: req.params.empresaId },
   });
